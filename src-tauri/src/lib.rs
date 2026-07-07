@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri_plugin_opener::OpenerExt;
 
-const APP_VERSION: &str = "2.2.1";
+const APP_VERSION: &str = "2.3.0";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
 
@@ -371,22 +371,301 @@ fn memory_path() -> String {
     memory::memory_file_path().to_string_lossy().to_string()
 }
 
-/// Ollama Login im Browser oeffnen (vereinfachter OAuth-aehnlicher Flow)
-/// Oeffnet https://ollama.com/signin im Standard-Browser (303 redirect zu signin.ollama.com).
-/// Der User loggt sich ein, kopiert seinen API Key und fuegt ihn in der App ein.
+// ============================================================================
+// OLLAMA DEVICE AUTH FLOW (v2.3)
+// ============================================================================
+// Ollama nutzt einen ed25519-Key-Pair-Auth-Flow:
+//   1. Client hat ~/.ollama/id_ed25519 (privat) + id_ed25519.pub (public)
+//   2. Connect-URL: https://ollama.com/connect?name=<PUBKEY>
+//   3. User oeffnet URL im Browser -> "Connect" Button -> klickt -> autorisiert
+//   4. Ollama CLI "ollama signin" pollt im Hintergrund bis autorisiert
+//   5. Danach kann man Cloud-Modelle pullen (z.B. glm-5.2:cloud)
+// Die lokale Ollama API auf Port 11434 hat KEINEN Auth-Endpoint.
+// Der Flow laeuft ueber die ollama CLI + ollama.com.
+// ============================================================================
+
+// Globaler State fuer den Auth-Flow
+static AUTH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static AUTH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Findet den ollama Binary-Pfad auf dem System.
+/// Prueft: PATH, /Applications/Ollama.app/Contents/Resources/ollama,
+/// /usr/local/bin/ollama, /opt/homebrew/bin/ollama
+fn find_ollama_binary() -> Option<String> {
+    let candidates = vec![
+        "ollama",
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+        "/usr/local/bin/ollama",
+        "/opt/homebrew/bin/ollama",
+        "/usr/bin/ollama",
+    ];
+    for c in candidates.iter() {
+        if std::process::Command::new(c).arg("--version").output().is_ok() {
+            return Some(c.to_string());
+        }
+    }
+    None
+}
+
+/// Liest den ollama ed25519 public key aus ~/.ollama/id_ed25519.pub
+/// Format: ssh-ed25519 AAAA... [comment]
+fn read_ollama_pubkey() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let pub_path = home.join(".ollama").join("id_ed25519.pub");
+    let content = std::fs::read_to_string(&pub_path).ok()?;
+    // Format: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... [comment]"
+    // Wir wollen nur den Key-Teil (das zweite Token)
+    let parts: Vec<&str> = content.trim().split_whitespace().collect();
+    if parts.len() >= 2 {
+        Some(parts[1].to_string())
+    } else {
+        Some(content.trim().to_string())
+    }
+}
+
+/// Startet den Ollama Device-Auth-Flow.
+/// 1. Oeffnet https://ollama.com/connect?name=<PUBKEY> im Browser (non-blocking)
+/// 2. Startet "ollama signin" im Hintergrund (pollt bis autorisiert)
+/// 3. Returned sofort ein JSON mit Status
+/// Der Frontend pollt check_auth_status() alle 2 Sekunden.
+#[tauri::command]
+async fn start_ollama_auth(app: tauri::AppHandle) -> Result<String, String> {
+    // Reset state
+    AUTH_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    AUTH_DONE.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Schritt 1: Pruefen ob Ollama binary verfuegbar ist
+    let ollama_bin = find_ollama_binary();
+
+    // Schritt 2: Public Key lesen
+    let pubkey = read_ollama_pubkey();
+
+    // Schritt 3: Connect-URL bauen und Browser oeffnen
+    let connect_url = match &pubkey {
+        Some(pk) => format!("https://ollama.com/connect?name={}", pk),
+        None => {
+            // Kein Key-Pair vorhanden -> falls ollama binary da ist, wird
+            // "ollama signin" den Key generieren. Andernfalls Fallback.
+            "https://ollama.com/connect".to_string()
+        }
+    };
+
+    let browser_ok = open_url_nonblocking(&app, &connect_url);
+
+    // Schritt 4: Falls ollama binary verfuegbar -> "ollama signin" im Hintergrund starten
+    // Das oeffnet ggf. nochmal den Browser und pollt bis der User "Connect" klickt.
+    let has_binary = ollama_bin.is_some();
+    if let Some(ref bin) = ollama_bin {
+        AUTH_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
+        let bin_clone = bin.clone();
+        // Background-Task: ollama signin ausfuehren
+        tokio::spawn(async move {
+            // ollama signin blockiert bis der User authentifiziert ist
+            // oder bis es fehlschlaegt. Wir fuehren es asynchron aus.
+            let result = tokio::process::Command::new(&bin_clone)
+                .arg("signin")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn();
+
+            match result {
+                Ok(mut child) => {
+                    // Warte bis der Prozess beendet ist (oder timeout nach 120s)
+                    let timeout = tokio::time::Duration::from_secs(120);
+                    match tokio::time::timeout(timeout, child.wait()).await {
+                        Ok(Ok(status)) => {
+                            eprintln!("ollama signin beendet mit status: {}", status);
+                            if status.success() {
+                                AUTH_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("ollama signin Fehler: {}", e);
+                        }
+                        Err(_) => {
+                            eprintln!("ollama signin timeout -> kill");
+                            let _ = child.kill().await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Konnte ollama signin nicht starten: {}", e);
+                }
+            }
+            AUTH_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    // Schritt 5: JSON-Response bauen
+    let response = serde_json::json!({
+        "success": browser_ok.is_ok(),
+        "message": if has_binary {
+            "Browser geoeffnet. Bitte klicke im Browser auf 'Connect' um dich zu authentifizieren."
+        } else {
+            "Browser geoeffnet. Bitte klicke im Browser auf 'Connect'. Falls kein ollama CLI gefunden wurde, kopiere nach dem Login deinen API Key."
+        },
+        "connect_url": connect_url,
+        "has_ollama_binary": has_binary,
+        "has_pubkey": pubkey.is_some(),
+        "browser_opened": browser_ok.is_ok()
+    });
+
+    serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e))
+}
+
+/// Prueft den Status des Ollama Device-Auth-Flows.
+/// Return: {authenticated: bool, message: "...", method: "device"|"key"|"none"}
+#[tauri::command]
+async fn check_auth_status() -> Result<String, String> {
+    let running = AUTH_RUNNING.load(std::sync::atomic::Ordering::SeqCst);
+    let done = AUTH_DONE.load(std::sync::atomic::Ordering::SeqCst);
+
+    if done {
+        // Auth abgeschlossen -> verifizieren durch Cloud-Modell-Pull
+        let authenticated = verify_ollama_auth().await;
+        let response = serde_json::json!({
+            "authenticated": authenticated,
+            "message": if authenticated { "Authentifiziert!" } else { "Authentifizierung abgelaufen, aber Verifikation fehlgeschlagen." },
+            "method": "device"
+        });
+        return serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e));
+    }
+
+    if running {
+        let response = serde_json::json!({
+            "authenticated": false,
+            "message": "Warte auf Bestaetigung im Browser. Bitte klicke auf 'Connect'.",
+            "method": "device"
+        });
+        return serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e));
+    }
+
+    // Weder running noch done -> pruefen ob bereits eingeloggt
+    let authenticated = verify_ollama_auth().await;
+    let response = serde_json::json!({
+        "authenticated": authenticated,
+        "message": if authenticated { "Bereits authentifiziert." } else { "Kein Auth-Flow aktiv. Bitte starte den Auth-Flow erneut." },
+        "method": if authenticated { "device" } else { "none" }
+    });
+    serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e))
+}
+
+/// Bricht den Auth-Flow ab (killt den background signin Prozess).
+#[tauri::command]
+async fn stop_auth() -> Result<bool, String> {
+    AUTH_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    // Der background task prueft AUTH_RUNNING und beendet sich
+    Ok(true)
+}
+
+/// Verifiziert Ollama-Auth durch Versuch einen Cloud-Modell-Pull.
+/// Wenn der Pull funktioniert -> authentifiziert.
+/// Wenn 401/403 -> nicht authentifiziert.
+async fn verify_ollama_auth() -> bool {
+    let client = http_client_short();
+    // Versuche einen Cloud-Modell-Pull (kleiner stub)
+    let url = "http://localhost:11434/api/pull";
+    let body = serde_json::json!({"name": "glm-5.2:cloud"});
+
+    match client.post(url).json(&body).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                // Erfolgreich -> authentifiziert
+                return true;
+            }
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                return false;
+            }
+            // Andere Status -> vielleicht authentifiziert aber anderer Fehler
+            // Pruefe /api/tags fuer Cloud-Modelle
+            return check_cloud_models().await;
+        }
+        Err(_) => {
+            // Ollama API nicht erreichbar -> pruefe ollama signin Status
+            return check_signin_status().await;
+        }
+    }
+}
+
+/// Prueft ob Cloud-Modelle in /api/tags verfuegbar sind (Indikator fuer Auth).
+async fn check_cloud_models() -> bool {
+    let client = http_client_short();
+    match client.get("http://localhost:11434/api/tags").send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                return false;
+            }
+            let text = resp.text().await.unwrap_or_default();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(models) = v.get("models").and_then(|m| m.as_array()) {
+                    for m in models.iter() {
+                        if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                            if name.ends_with(":cloud") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+/// Prueft "ollama signin" Status durch Ausfuehrung (non-interactive).
+/// Wenn "already signed in" -> true.
+async fn check_signin_status() -> bool {
+    let bin = match find_ollama_binary() {
+        Some(b) => b,
+        None => return false,
+    };
+    // ollama signin gibt "You are already signed in" aus wenn bereits eingeloggt
+    match tokio::process::Command::new(&bin)
+        .arg("signin")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let combined = format!("{} {}", stdout, stderr);
+            combined.contains("already signed in") || combined.contains("You are already")
+        }
+        Err(_) => false,
+    }
+}
+
+/// HTTP Client mit kurzem Timeout fuer Auth-Checks
+fn http_client_short() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Ollama Login im Browser oeffnen (Fallback / manuelle Methode).
+/// Oeffnet https://ollama.com/connect im Standard-Browser.
 /// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_login(app: tauri::AppHandle) -> Result<bool, String> {
-    let login_url = "https://ollama.com/signin".to_string();
+    let pubkey = read_ollama_pubkey();
+    let login_url = match pubkey {
+        Some(pk) => format!("https://ollama.com/connect?name={}", pk),
+        None => "https://ollama.com/connect".to_string(),
+    };
     open_url_nonblocking(&app, &login_url)
 }
 
-/// Ollama API Keys / Dashboard im Browser oeffnen
-/// Oeffnet https://ollama.com/dashboard -- nach Login sieht man das Dashboard mit API Keys Option.
+/// Ollama API Keys Seite im Browser oeffnen (Fallback).
+/// Oeffnet https://ollama.com/settings/keys
 /// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_keys(app: tauri::AppHandle) -> Result<bool, String> {
-    let keys_url = "https://ollama.com/dashboard".to_string();
+    let keys_url = "https://ollama.com/settings/keys".to_string();
     open_url_nonblocking(&app, &keys_url)
 }
 
@@ -397,7 +676,7 @@ fn open_url_nonblocking(app: &tauri::AppHandle, url: &str) -> Result<bool, Strin
     match app.opener().open_url(url, None::<&str>) {
         Ok(_) => return Ok(true),
         Err(e) => {
-            eprintln!("Opener-Plugin fehlgeschlagen ({}), versuche std::process::Command", e);
+            eprintln!("Opener-Plugin fehlgeschaltet ({}), versuche std::process::Command", e);
         }
     }
     // Versuch 2: std::process::Command mit spawn() (non-blocking, wartet nicht)
@@ -437,6 +716,9 @@ pub fn run() {
             memory_path,
             open_ollama_login,
             open_ollama_keys,
+            start_ollama_auth,
+            check_auth_status,
+            stop_auth,
             update::check_github_release,
             update::download_update,
             update::install_update,

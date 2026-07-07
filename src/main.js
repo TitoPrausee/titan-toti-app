@@ -230,8 +230,11 @@
     // ESC schliesst Modal (globale Listener weiter unten)
   }
 
-  // --- OLLAMA CONNECT MODAL ---
+  // --- OLLAMA CONNECT MODAL (Device-Auth-Flow v2.3) ---
   var ollamaConnectContext = "setup"; // "setup" oder "settings"
+  var ollamaAuthPollTimer = null;
+  var ollamaAuthStartTime = 0;
+  var OLLAMA_AUTH_TIMEOUT = 60000; // 60 Sekunden Timeout
 
   function openOllamaConnectModal(context) {
     ollamaConnectContext = context || "setup";
@@ -242,23 +245,113 @@
     modal.classList.remove("modal-closing");
     modal.classList.add("modal-opening");
 
-    // Loading-Spinner anzeigen
-    $("ollamaConnectStatus").innerHTML = '<span class="ollama-spinner"></span> Oeffne Browser...';
-    $("ollamaConnectStatus").className = "hint";
+    // UI zuruecksetzen
     $("ollamaConnectKey").value = "";
+    $("ollamaConnectFallback").open = false;
+    $("ollamaConnectSpinner").style.display = "none";
+    $("ollamaConnectResult").style.display = "none";
+    $("ollamaConnectResult").innerHTML = "";
 
-    // Browser oeffnen -- non-blocking, sofortige Rueckmeldung
-    callBackend("open_ollama_login", {}).then(function() {
-      $("ollamaConnectStatus").textContent = "Browser geoeffnet. Bitte logge dich auf ollama.com ein und kopiere deinen API Key.";
-      $("ollamaConnectStatus").className = "hint success";
-      setTimeout(function() { $("ollamaConnectKey").focus(); }, 100);
+    // Device-Auth-Flow starten
+    $("ollamaConnectStatus").innerHTML = '<span class="ollama-spinner"></span> Starte Device-Auth-Flow...';
+    $("ollamaConnectStatus").className = "hint";
+
+    callBackend("start_ollama_auth", {}).then(function(resp) {
+      var data = typeof resp === "string" ? JSON.parse(resp) : resp;
+      if (data.success || data.browser_opened) {
+        // Browser geoeffnet -> Polling starten
+        $("ollamaConnectStatus").textContent = data.message || "Browser geoeffnet. Bitte klicke auf 'Connect'.";
+        $("ollamaConnectStatus").className = "hint success";
+        $("ollamaConnectSpinner").style.display = "block";
+        startAuthPolling();
+      } else {
+        $("ollamaConnectStatus").textContent = data.message || "Auth-Flow konnte nicht gestartet werden.";
+        $("ollamaConnectStatus").className = "hint error";
+        $("ollamaConnectFallback").open = true;
+      }
     }).catch(function(err) {
-      $("ollamaConnectStatus").innerHTML = "Browser konnte nicht geoeffnet werden. Bitte oeffne <a href=\"https://ollama.com/signin\" target=\"_blank\" rel=\"noopener\">https://ollama.com/signin</a> manuell.";
+      $("ollamaConnectStatus").textContent = "Fehler: " + err;
       $("ollamaConnectStatus").className = "hint error";
+      $("ollamaConnectFallback").open = true;
     });
   }
 
+  // Polling: check_auth_status alle 2 Sekunden
+  function startAuthPolling() {
+    if (ollamaAuthPollTimer) clearInterval(ollamaAuthPollTimer);
+    ollamaAuthStartTime = Date.now();
+    ollamaAuthPollTimer = setInterval(pollAuthStatus, 2000);
+    // Sofort erster Check
+    pollAuthStatus();
+  }
+
+  function pollAuthStatus() {
+    var elapsed = Date.now() - ollamaAuthStartTime;
+    if (elapsed > OLLAMA_AUTH_TIMEOUT) {
+      stopAuthPolling();
+      callBackend("stop_auth", {}).catch(function() {});
+      $("ollamaConnectSpinner").style.display = "none";
+      $("ollamaConnectStatus").textContent = "Zeitüberschreitung. Bitte versuche es erneut.";
+      $("ollamaConnectStatus").className = "hint error";
+      $("ollamaConnectFallback").open = true;
+      return;
+    }
+
+    // Countdown anzeigen
+    var remaining = Math.ceil((OLLAMA_AUTH_TIMEOUT - elapsed) / 1000);
+    $("ollamaConnectPollMsg").textContent = "Warte auf Bestätigung im Browser... (" + remaining + "s)";
+
+    callBackend("check_auth_status", {}).then(function(resp) {
+      var data = typeof resp === "string" ? JSON.parse(resp) : resp;
+      if (data.authenticated) {
+        // Erfolg!
+        stopAuthPolling();
+        $("ollamaConnectSpinner").style.display = "none";
+        $("ollamaConnectResult").style.display = "block";
+        $("ollamaConnectResult").innerHTML = '<div style="font-size:48px;">🎉</div><p style="font-size:16px;font-weight:600;color:#2d9d2d;margin-top:8px;">Verbunden!</p><p style="font-size:13px;color:#888;">Ollama authentifiziert.</p>';
+        $("ollamaConnectStatus").textContent = "Verbunden! 🎉";
+        $("ollamaConnectStatus").className = "hint success";
+
+        // Settings speichern
+        handleAuthSuccess();
+      } else if (data.message) {
+        // Noch warten
+        $("ollamaConnectStatus").textContent = data.message;
+        $("ollamaConnectStatus").className = "hint";
+      }
+    }).catch(function(err) {
+      // Fehler beim Pollen -> weiter versuchen
+      console.log("Auth poll error:", err);
+    });
+  }
+
+  function stopAuthPolling() {
+    if (ollamaAuthPollTimer) {
+      clearInterval(ollamaAuthPollTimer);
+      ollamaAuthPollTimer = null;
+    }
+  }
+
+  // Bei erfolgreicher Device-Auth: Settings updaten
+  function handleAuthSuccess() {
+    var apiUrl = "http://localhost:11434"; // Lokale Ollama API mit Cloud-Zugang
+    if (ollamaConnectContext === "setup") {
+      $("setupApiUrl").value = apiUrl;
+      $("setupApiKey").value = ""; // Kein API Key noetig bei Device-Auth
+      $("setupApiKeyGroup").style.display = "none";
+    } else {
+      $("apiUrlInput").value = apiUrl;
+      $("apiKeyInput").value = "";
+      $("ollamaLoginStatus").textContent = "Verbunden mit Ollama Cloud (Device Auth)! 🎉";
+      $("ollamaLoginStatus").className = "hint success";
+      saveSettings();
+    }
+    setTimeout(closeOllamaConnectModal, 2000);
+  }
+
   function closeOllamaConnectModal() {
+    stopAuthPolling();
+    callBackend("stop_auth", {}).catch(function() {});
     var backdrop = $("ollamaConnectBackdrop");
     var modal = $("ollamaConnectModal");
     modal.classList.remove("modal-opening");
@@ -279,6 +372,7 @@
     $("ollamaOpenKeysBtn").addEventListener("click", function() {
       callBackend("open_ollama_keys", {}).catch(function() {});
     });
+    // Fallback: manueller API Key
     $("ollamaConnectConfirmBtn").addEventListener("click", function() {
       var key = $("ollamaConnectKey").value.trim();
       if (!key) {
@@ -296,7 +390,6 @@
       }
       callBackend("ollama_health", { apiUrl: apiUrl }).then(function(ok) {
         if (ok) {
-          // Key speichern
           if (ollamaConnectContext === "setup") {
             $("setupApiUrl").value = apiUrl;
             $("setupApiKey").value = key;
@@ -312,7 +405,6 @@
           }
           setTimeout(closeOllamaConnectModal, 1000);
         } else {
-          // Key trotzdem speichern (Server vielleicht erst nach Key verfuegbar)
           if (ollamaConnectContext === "setup") {
             $("setupApiUrl").value = apiUrl;
             $("setupApiKey").value = key;

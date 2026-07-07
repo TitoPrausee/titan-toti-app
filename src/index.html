@@ -218,7 +218,7 @@
                 <input type="password" id="apiKeyInput" placeholder="leer fuer lokal" style="flex:1;" />
                 <button class="btn-secondary" id="openOllamaLoginBtn" style="white-space:nowrap;">Mit Ollama verbinden</button>
               </div>
-              <p class="hint">Klicke "Mit Ollama verbinden" um den Browser zu öffnen. Nach dem Login kopiere deinen API Key und füge ihn oben ein.</p>
+              <p class="hint">Klicke "Mit Ollama verbinden" um den Device-Auth-Flow zu starten. Ein Browser öffnet sich mit einer "Connect"-Seite — klicke auf "Connect" um die App zu authentifizieren.</p>
               <div class="hint" id="ollamaLoginStatus"></div>
             </div>
             <div class="form-group">
@@ -342,27 +342,47 @@
   <!-- OLLAMA CONNECT MODAL -->
   <div id="ollamaConnectBackdrop" class="modal-backdrop" style="display:none;"></div>
   <div id="ollamaConnectModal" class="modal" style="display:none;">
-    <div class="modal-content" style="max-width:460px;">
+    <div class="modal-content" style="max-width:480px;">
       <div class="modal-header">
         <h2>Mit Ollama verbinden</h2>
         <button class="modal-close" id="ollamaConnectClose" title="Schließen">×</button>
       </div>
       <div style="padding:0 20px 20px;">
-        <p class="hint" style="margin-bottom:16px;font-size:13px;line-height:1.6;">
-          Du wurdest zur Ollama-Login-Seite weitergeleitet. Nach dem Login kopiere deinen API Key und füge ihn hier ein.
+        <!-- Device-Auth-Flow: Browser oeffnet sich mit "Connect" Button -->
+        <p class="hint" style="margin-bottom:16px;font-size:13px;line-height:1.6;" id="ollamaConnectIntro">
+          Ein Browser-Fenster mit der Ollama "Connect"-Seite wurde geöffnet. Bitte klicke im Browser auf "Connect" um die App zu authentifizieren.
         </p>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="password" id="ollamaConnectKey" placeholder="oll-... API Key einfügen" />
+
+        <!-- Status-Anzeige -->
+        <div class="hint" id="ollamaConnectStatus" style="margin-bottom:12px;"></div>
+
+        <!-- Progress-Spinner (waehrend Polling) -->
+        <div id="ollamaConnectSpinner" style="display:none;text-align:center;padding:12px 0;">
+          <span class="ollama-spinner"></span>
+          <p style="margin-top:8px;font-size:13px;color:#888;" id="ollamaConnectPollMsg">Warte auf Bestätigung im Browser...</p>
         </div>
-        <div class="btn-row" style="margin-bottom:12px;">
-          <button class="btn-secondary" id="ollamaReopenLoginBtn" style="flex:1;">Ollama Login öffnen</button>
-          <button class="btn-secondary" id="ollamaOpenKeysBtn" style="flex:1;">API Keys öffnen</button>
-        </div>
-        <div class="form-group">
-          <button class="btn-primary" id="ollamaConnectConfirmBtn" style="width:100%;">Verbinden</button>
-        </div>
-        <div class="hint" id="ollamaConnectStatus"></div>
+
+        <!-- Erfolg / Fehler -->
+        <div id="ollamaConnectResult" style="display:none;text-align:center;padding:12px 0;"></div>
+
+        <!-- Fallback: Manueller API-Key (einklappbar) -->
+        <details id="ollamaConnectFallback" style="margin-top:16px;border-top:1px solid #e0e0e0;padding-top:12px;">
+          <summary style="cursor:pointer;font-size:13px;color:#666;">API Key manuell eingeben (Fallback)</summary>
+          <div style="margin-top:12px;">
+            <p class="hint" style="font-size:12px;margin-bottom:8px;">Falls der automatische Flow nicht funktioniert: Logge dich auf ollama.com ein, kopiere deinen API Key und füge ihn hier ein.</p>
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="password" id="ollamaConnectKey" placeholder="oll-... API Key einfügen" />
+            </div>
+            <div class="btn-row" style="margin-bottom:12px;">
+              <button class="btn-secondary" id="ollamaReopenLoginBtn" style="flex:1;">Connect-Seite öffnen</button>
+              <button class="btn-secondary" id="ollamaOpenKeysBtn" style="flex:1;">API Keys öffnen</button>
+            </div>
+            <div class="form-group">
+              <button class="btn-primary" id="ollamaConnectConfirmBtn" style="width:100%;">Mit API Key verbinden</button>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </div>
