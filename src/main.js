@@ -1,5 +1,6 @@
-// Titan Toti v2.2 — Standalone Frontend
+// Titan Toti v2.3 — Major Overhaul Frontend
 // Vanilla JS — KEINE Backticks, KEINE Frameworks
+// Nutzt window.__TAURI__.core.invoke fuer alle Rust-Calls
 
 (function() {
   "use strict";
@@ -15,6 +16,9 @@
     systemPrompt: "titantoti_system_prompt",
     systemAccess: "titantoti_system_access",
     skillsEnabled: "titantoti_skills_enabled",
+    bypassPermissions: "titantoti_bypass_permissions",
+    autoScreenshot: "titantoti_auto_screenshot",
+    continuousMode: "titantoti_continuous_mode",
     theme: "titantoti_theme",
     currentSession: "titantoti_current_session",
     setupDone: "titantoti_setup_done"
@@ -30,6 +34,9 @@
     systemPrompt: "",
     systemAccess: true,
     skillsEnabled: true,
+    bypassPermissions: false,
+    autoScreenshot: false,
+    continuousMode: false,
     theme: "dark"
   };
 
@@ -64,6 +71,9 @@
     systemPrompt: getSetting(STORAGE_KEYS.systemPrompt, ""),
     systemAccess: getSettingBool(STORAGE_KEYS.systemAccess, defaults.systemAccess),
     skillsEnabled: getSettingBool(STORAGE_KEYS.skillsEnabled, defaults.skillsEnabled),
+    bypassPermissions: getSettingBool(STORAGE_KEYS.bypassPermissions, defaults.bypassPermissions),
+    autoScreenshot: getSettingBool(STORAGE_KEYS.autoScreenshot, defaults.autoScreenshot),
+    continuousMode: getSettingBool(STORAGE_KEYS.continuousMode, defaults.continuousMode),
     theme: getSetting(STORAGE_KEYS.theme, defaults.theme),
     currentSession: getSetting(STORAGE_KEYS.currentSession, "")
   };
@@ -73,13 +83,17 @@
 
   // --- TAUURI BRIDGE ---
   var invoke = null;
-  if (typeof window.__TAURI__ !== "undefined" && window.__TAURI__.core) {
-    invoke = window.__TAURI__.core.invoke;
+  if (typeof window.__TAURI__ !== "undefined") {
+    if (window.__TAURI__.core) {
+      invoke = window.__TAURI__.core.invoke;
+    } else if (window.__TAURI__.invoke) {
+      invoke = window.__TAURI__.invoke;
+    }
   }
 
   function callBackend(cmd, args) {
     if (invoke) {
-      return invoke(cmd, args);
+      return invoke(cmd, args || {});
     }
     return Promise.reject("Tauri nicht verfuegbar");
   }
@@ -101,9 +115,31 @@
     return h + ":" + m;
   }
 
+  function formatTimestamp(ts) {
+    var d = new Date(ts);
+    var h = String(d.getHours()).padStart(2, "0");
+    var m = String(d.getMinutes()).padStart(2, "0");
+    var s = String(d.getSeconds()).padStart(2, "0");
+    return h + ":" + m + ":" + s;
+  }
+
   function generateId() {
     return "s_" + Date.now() + "_" + Math.floor(Math.random() * 10000);
   }
+
+  // --- ACTIVITY ICONS ---
+  var ACTIVITY_ICONS = {
+    thinking: { icon: "🧠", color: "thinking" },
+    action: { icon: "⚡", color: "action" },
+    skill: { icon: "🔧", color: "skill" },
+    file_read: { icon: "📖", color: "file_read" },
+    file_write: { icon: "✏️", color: "file_write" },
+    command: { icon: "💻", color: "command" },
+    agent_started: { icon: "🚀", color: "agent_started" },
+    agent_completed: { icon: "✅", color: "agent_completed" },
+    error: { icon: "❌", color: "error" },
+    memory_saved: { icon: "💾", color: "memory_saved" }
+  };
 
   // --- MARKDOWN RENDERING ---
   function renderMarkdown(text) {
@@ -123,11 +159,27 @@
     html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     html = html.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+    // Listen
     html = html.replace(/^[\*\-]\s+(.+)$/gm, "<li>$1</li>");
     html = html.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
+    // Tabellen (einfaches Markdown-Table)
+    html = html.replace(/^\|(.+)\|\n\|[-:\s|]+\|\n([\s\S]*?)(?=\n\n|\n$|$)/gm, function(match, header, rows) {
+      var heads = header.split("|").map(function(h) { return h.trim(); }).filter(function(h) { return h.length > 0; });
+      var thead = "<thead><tr>" + heads.map(function(h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr></thead>";
+      var rowLines = rows.trim().split("\n");
+      var tbody = "<tbody>";
+      rowLines.forEach(function(r) {
+        var cells = r.split("|").map(function(c) { return c.trim(); }).filter(function(c, i, arr) { return c.length > 0 || i > 0; });
+        tbody += "<tr>" + cells.map(function(c) { return "<td>" + escapeHtml(c) + "</td>"; }).join("") + "</tr>";
+      });
+      tbody += "</tbody>";
+      return "<table>" + thead + tbody + "</table>";
+    });
+    // Absaetze
     var parts = html.split(/\n\n+/);
     html = parts.map(function(p) {
       if (p.indexOf("<ul>") === 0 || p.indexOf("<ol>") === 0) return p;
+      if (p.indexOf("<table") === 0) return p;
       if (p.indexOf("@@CODEBLOCK_") >= 0) return p;
       return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
     }).join("\n");
@@ -139,32 +191,19 @@
     return html;
   }
 
-  // --- MODELL-AUSWAHL MODAL ---
-  var modelModalContext = "setup"; // "setup" oder "settings"
-  var availableModels = [];
-
-  function openModelModal(context, models) {
-    modelModalContext = context || "setup";
-    availableModels = models || [];
-    var backdrop = $("modelModalBackdrop");
-    var modal = $("modelModal");
+  // --- MODAL HELPERS ---
+  function openModal(backdropId, modalId) {
+    var backdrop = $(backdropId);
+    var modal = $(modalId);
     backdrop.style.display = "block";
     modal.style.display = "flex";
-    // Animation: slide-down + fade-in
     modal.classList.remove("modal-closing");
     modal.classList.add("modal-opening");
-    // Search zuruecksetzen
-    $("modelSearchInput").value = "";
-    // Modelle rendern
-    renderModelList(availableModels, "");
-    // Focus auf Search
-    setTimeout(function() { $("modelSearchInput").focus(); }, 100);
   }
 
-  function closeModelModal() {
-    var backdrop = $("modelModalBackdrop");
-    var modal = $("modelModal");
-    // Animation: slide-up + fade-out
+  function closeModal(backdropId, modalId) {
+    var backdrop = $(backdropId);
+    var modal = $(modalId);
     modal.classList.remove("modal-opening");
     modal.classList.add("modal-closing");
     setTimeout(function() {
@@ -174,13 +213,38 @@
     }, 300);
   }
 
+  // --- CONFIRM DIALOG ---
+  var confirmCallback = null;
+  function showConfirm(title, message, callback) {
+    $("confirmTitle").textContent = title;
+    $("confirmMessage").textContent = message;
+    confirmCallback = callback;
+    openModal("confirmBackdrop", "confirmModal");
+  }
+
+  // --- MODELL-AUSWAHL MODAL ---
+  var modelModalContext = "setup";
+  var availableModels = [];
+
+  function openModelModal(context, models) {
+    modelModalContext = context || "setup";
+    availableModels = models || [];
+    openModal("modelModalBackdrop", "modelModal");
+    $("modelSearchInput").value = "";
+    renderModelList(availableModels, "");
+    setTimeout(function() { $("modelSearchInput").focus(); }, 100);
+  }
+
+  function closeModelModal() { closeModal("modelModalBackdrop", "modelModal"); }
+
   function renderModelList(models, filter) {
     var container = $("modelListContainer");
     var filtered = models;
     if (filter) {
       var f = filter.toLowerCase();
       filtered = models.filter(function(m) {
-        return m.toLowerCase().indexOf(f) >= 0;
+        var name = typeof m === "string" ? m : (m.name || m);
+        return name.toLowerCase().indexOf(f) >= 0;
       });
     }
     if (filtered.length === 0) {
@@ -189,13 +253,14 @@
     }
     container.innerHTML = "";
     filtered.forEach(function(m) {
+      var name = typeof m === "string" ? m : (m.name || m);
+      var isVision = typeof m === "object" && m.vision;
       var card = document.createElement("div");
       card.className = "model-card";
-      card.setAttribute("data-model", m);
-      card.innerHTML = '<div class="model-card-name">' + escapeHtml(m) + '</div>';
-      card.addEventListener("click", function() {
-        selectModelFromModal(m);
-      });
+      card.setAttribute("data-model", name);
+      var visionBadge = isVision ? '<div class="model-card-vision">Vision</div>' : "";
+      card.innerHTML = '<div class="model-card-name">' + escapeHtml(name) + '</div>' + visionBadge;
+      card.addEventListener("click", function() { selectModelFromModal(name); });
       container.appendChild(card);
     });
   }
@@ -204,63 +269,47 @@
     if (modelModalContext === "setup") {
       $("setupModelInput").value = modelName;
       $("setupModelDisplay").value = modelName;
-      $("setupModelStatus").textContent = "Modell: " + modelName + " ausgewählt";
+      $("setupModelStatus").textContent = "Modell: " + modelName + " ausgewaehlt";
       $("setupModelStatus").className = "hint success";
     } else {
-      // Settings
       $("modelDisplay").value = modelName;
-      // Internen select fuer saveSettings aktualisieren (falls vorhanden)
       settings.model = modelName;
       setSetting(STORAGE_KEYS.model, modelName);
-      $("settingsModelStatus").textContent = "Modell: " + modelName + " ausgewählt";
+      $("settingsModelStatus").textContent = "Modell: " + modelName + " ausgewaehlt";
       $("settingsModelStatus").className = "hint success";
     }
     closeModelModal();
   }
 
   function setupModelModalEvents() {
-    // Schliessen-Button
     $("modelModalClose").addEventListener("click", closeModelModal);
-    // Backdrop Klick schliesst
     $("modelModalBackdrop").addEventListener("click", closeModelModal);
-    // Search
     $("modelSearchInput").addEventListener("input", function() {
       renderModelList(availableModels, this.value);
     });
-    // ESC schliesst Modal (globale Listener weiter unten)
   }
 
-  // --- OLLAMA CONNECT MODAL (Device-Auth-Flow v2.3) ---
-  var ollamaConnectContext = "setup"; // "setup" oder "settings"
+  // --- OLLAMA CONNECT MODAL ---
+  var ollamaConnectContext = "setup";
   var ollamaAuthPollTimer = null;
   var ollamaAuthStartTime = 0;
-  var OLLAMA_AUTH_TIMEOUT = 60000; // 60 Sekunden Timeout
+  var OLLAMA_AUTH_TIMEOUT = 60000;
 
   function openOllamaConnectModal(context) {
     ollamaConnectContext = context || "setup";
-    var backdrop = $("ollamaConnectBackdrop");
-    var modal = $("ollamaConnectModal");
-    backdrop.style.display = "block";
-    modal.style.display = "flex";
-    modal.classList.remove("modal-closing");
-    modal.classList.add("modal-opening");
-
-    // UI zuruecksetzen
+    openModal("ollamaConnectBackdrop", "ollamaConnectModal");
     $("ollamaConnectKey").value = "";
     $("ollamaConnectFallback").open = false;
     $("ollamaConnectSpinner").style.display = "none";
     $("ollamaConnectResult").style.display = "none";
     $("ollamaConnectResult").innerHTML = "";
-
-    // Device-Auth-Flow starten
     $("ollamaConnectStatus").innerHTML = '<span class="ollama-spinner"></span> Starte Device-Auth-Flow...';
     $("ollamaConnectStatus").className = "hint";
 
     callBackend("start_ollama_auth", {}).then(function(resp) {
       var data = typeof resp === "string" ? JSON.parse(resp) : resp;
       if (data.success || data.browser_opened) {
-        // Browser geoeffnet -> Polling starten
-        $("ollamaConnectStatus").textContent = data.message || "Browser geoeffnet. Bitte klicke auf 'Connect'.";
+        $("ollamaConnectStatus").textContent = data.message || "Browser geoeffnet. Bitte klicke auf Connect.";
         $("ollamaConnectStatus").className = "hint success";
         $("ollamaConnectSpinner").style.display = "block";
         startAuthPolling();
@@ -276,12 +325,10 @@
     });
   }
 
-  // Polling: check_auth_status alle 2 Sekunden
   function startAuthPolling() {
     if (ollamaAuthPollTimer) clearInterval(ollamaAuthPollTimer);
     ollamaAuthStartTime = Date.now();
     ollamaAuthPollTimer = setInterval(pollAuthStatus, 2000);
-    // Sofort erster Check
     pollAuthStatus();
   }
 
@@ -291,53 +338,39 @@
       stopAuthPolling();
       callBackend("stop_auth", {}).catch(function() {});
       $("ollamaConnectSpinner").style.display = "none";
-      $("ollamaConnectStatus").textContent = "Zeitüberschreitung. Bitte versuche es erneut.";
+      $("ollamaConnectStatus").textContent = "Zeitueberschreitung. Bitte versuche es erneut.";
       $("ollamaConnectStatus").className = "hint error";
       $("ollamaConnectFallback").open = true;
       return;
     }
-
-    // Countdown anzeigen
     var remaining = Math.ceil((OLLAMA_AUTH_TIMEOUT - elapsed) / 1000);
-    $("ollamaConnectPollMsg").textContent = "Warte auf Bestätigung im Browser... (" + remaining + "s)";
-
+    $("ollamaConnectPollMsg").textContent = "Warte auf Bestaetigung im Browser... (" + remaining + "s)";
     callBackend("check_auth_status", {}).then(function(resp) {
       var data = typeof resp === "string" ? JSON.parse(resp) : resp;
       if (data.authenticated) {
-        // Erfolg!
         stopAuthPolling();
         $("ollamaConnectSpinner").style.display = "none";
         $("ollamaConnectResult").style.display = "block";
-        $("ollamaConnectResult").innerHTML = '<div style="font-size:48px;">🎉</div><p style="font-size:16px;font-weight:600;color:#2d9d2d;margin-top:8px;">Verbunden!</p><p style="font-size:13px;color:#888;">Ollama authentifiziert.</p>';
+        $("ollamaConnectResult").innerHTML = '<div style="font-size:48px;">🎉</div><p style="font-size:16px;font-weight:600;color:#2d9d2d;margin-top:8px;">Verbunden!</p>';
         $("ollamaConnectStatus").textContent = "Verbunden! 🎉";
         $("ollamaConnectStatus").className = "hint success";
-
-        // Settings speichern
         handleAuthSuccess();
       } else if (data.message) {
-        // Noch warten
         $("ollamaConnectStatus").textContent = data.message;
         $("ollamaConnectStatus").className = "hint";
       }
-    }).catch(function(err) {
-      // Fehler beim Pollen -> weiter versuchen
-      console.log("Auth poll error:", err);
-    });
+    }).catch(function() {});
   }
 
   function stopAuthPolling() {
-    if (ollamaAuthPollTimer) {
-      clearInterval(ollamaAuthPollTimer);
-      ollamaAuthPollTimer = null;
-    }
+    if (ollamaAuthPollTimer) { clearInterval(ollamaAuthPollTimer); ollamaAuthPollTimer = null; }
   }
 
-  // Bei erfolgreicher Device-Auth: Settings updaten
   function handleAuthSuccess() {
-    var apiUrl = "http://localhost:11434"; // Lokale Ollama API mit Cloud-Zugang
+    var apiUrl = "http://localhost:11434";
     if (ollamaConnectContext === "setup") {
       $("setupApiUrl").value = apiUrl;
-      $("setupApiKey").value = ""; // Kein API Key noetig bei Device-Auth
+      $("setupApiKey").value = "";
       $("setupApiKeyGroup").style.display = "none";
     } else {
       $("apiUrlInput").value = apiUrl;
@@ -352,15 +385,7 @@
   function closeOllamaConnectModal() {
     stopAuthPolling();
     callBackend("stop_auth", {}).catch(function() {});
-    var backdrop = $("ollamaConnectBackdrop");
-    var modal = $("ollamaConnectModal");
-    modal.classList.remove("modal-opening");
-    modal.classList.add("modal-closing");
-    setTimeout(function() {
-      modal.style.display = "none";
-      backdrop.style.display = "none";
-      modal.classList.remove("modal-closing");
-    }, 300);
+    closeModal("ollamaConnectBackdrop", "ollamaConnectModal");
   }
 
   function setupOllamaConnectEvents() {
@@ -372,7 +397,6 @@
     $("ollamaOpenKeysBtn").addEventListener("click", function() {
       callBackend("open_ollama_keys", {}).catch(function() {});
     });
-    // Fallback: manueller API Key
     $("ollamaConnectConfirmBtn").addEventListener("click", function() {
       var key = $("ollamaConnectKey").value.trim();
       if (!key) {
@@ -380,44 +404,20 @@
         $("ollamaConnectStatus").className = "hint error";
         return;
       }
-      $("ollamaConnectStatus").textContent = "Teste Verbindung...";
-      $("ollamaConnectStatus").className = "hint";
-      var apiUrl = "https://api.ollama.ai";
-      if (ollamaConnectContext === "setup") {
-        apiUrl = $("setupApiUrl").value.trim() || "https://api.ollama.ai";
-      } else {
-        apiUrl = $("apiUrlInput").value.trim() || "https://api.ollama.ai";
-      }
+      var apiUrl = ollamaConnectContext === "setup" ? ($("setupApiUrl").value.trim() || "https://api.ollama.ai") : ($("apiUrlInput").value.trim() || "https://api.ollama.ai");
       callBackend("ollama_health", { apiUrl: apiUrl }).then(function(ok) {
-        if (ok) {
-          if (ollamaConnectContext === "setup") {
-            $("setupApiUrl").value = apiUrl;
-            $("setupApiKey").value = key;
-            $("setupApiKeyGroup").style.display = "block";
-            $("ollamaConnectStatus").textContent = "Verbunden! API Key gespeichert.";
-            $("ollamaConnectStatus").className = "hint success";
-          } else {
-            $("apiUrlInput").value = apiUrl;
-            $("apiKeyInput").value = key;
-            $("ollamaLoginStatus").textContent = "Verbunden mit Ollama Cloud!";
-            $("ollamaLoginStatus").className = "hint success";
-            saveSettings();
-          }
-          setTimeout(closeOllamaConnectModal, 1000);
+        if (ollamaConnectContext === "setup") {
+          $("setupApiUrl").value = apiUrl;
+          $("setupApiKey").value = key;
+          $("setupApiKeyGroup").style.display = "block";
         } else {
-          if (ollamaConnectContext === "setup") {
-            $("setupApiUrl").value = apiUrl;
-            $("setupApiKey").value = key;
-            $("setupApiKeyGroup").style.display = "block";
-          } else {
-            $("apiUrlInput").value = apiUrl;
-            $("apiKeyInput").value = key;
-            saveSettings();
-          }
-          $("ollamaConnectStatus").textContent = "API Key gespeichert. Server nicht direkt erreichbar — wird beim Chat getestet.";
-          $("ollamaConnectStatus").className = "hint";
-          setTimeout(closeOllamaConnectModal, 1500);
+          $("apiUrlInput").value = apiUrl;
+          $("apiKeyInput").value = key;
+          saveSettings();
         }
+        $("ollamaConnectStatus").textContent = "API Key gespeichert.";
+        $("ollamaConnectStatus").className = "hint success";
+        setTimeout(closeOllamaConnectModal, 1000);
       }).catch(function(err) {
         $("ollamaConnectStatus").textContent = "Fehler: " + err;
         $("ollamaConnectStatus").className = "hint error";
@@ -425,18 +425,17 @@
     });
   }
 
-  // Globale ESC-Listener fuer alle Modals
+  // --- GLOBAL ESC ---
   function setupGlobalEscListener() {
     document.addEventListener("keydown", function(e) {
       if (e.key === "Escape") {
-        var modelModal = $("modelModal");
-        var ollamaModal = $("ollamaConnectModal");
-        if (modelModal.style.display !== "none") {
-          closeModelModal();
-        }
-        if (ollamaModal.style.display !== "none") {
-          closeOllamaConnectModal();
-        }
+        if ($("modelModal").style.display !== "none") closeModelModal();
+        if ($("ollamaConnectModal").style.display !== "none") closeOllamaConnectModal();
+        if ($("skillModal").style.display !== "none") closeModal("skillModalBackdrop", "skillModal");
+        if ($("memoryEditModal").style.display !== "none") closeModal("memoryEditBackdrop", "memoryEditModal");
+        if ($("pwEditModal").style.display !== "none") closeModal("pwEditBackdrop", "pwEditModal");
+        if ($("agentModal").style.display !== "none") closeModal("agentModalBackdrop", "agentModal");
+        if ($("confirmModal").style.display !== "none") closeModal("confirmBackdrop", "confirmModal");
       }
     });
   }
@@ -448,11 +447,8 @@
       showMainApp();
       return;
     }
-
-    var setupScreen = $("setupScreen");
-    var mainApp = $("mainApp");
-    setupScreen.style.display = "flex";
-    mainApp.style.display = "none";
+    $("setupScreen").style.display = "flex";
+    $("mainApp").style.display = "none";
 
     $$("#setupScreen [data-mode]").forEach(function(btn) {
       btn.addEventListener("click", function() {
@@ -460,7 +456,6 @@
         var config = $("setupConfig");
         var urlInput = $("setupApiUrl");
         var keyGroup = $("setupApiKeyGroup");
-
         config.style.display = "block";
         if (mode === "local") {
           urlInput.value = "http://localhost:11434";
@@ -469,7 +464,6 @@
         } else if (mode === "cloud") {
           urlInput.value = "https://api.ollama.ai";
           keyGroup.style.display = "none";
-          // Ollama Connect Modal oeffnen
           openOllamaConnectModal("setup");
           loadSetupModels(urlInput.value, $("setupApiKey").value);
         } else {
@@ -481,14 +475,9 @@
     });
 
     $("setupModelChooseBtn").addEventListener("click", function() {
-      var url = $("setupApiUrl").value.trim();
-      var key = $("setupApiKey").value.trim();
-      loadSetupModels(url, key);
+      loadSetupModels($("setupApiUrl").value.trim(), $("setupApiKey").value.trim());
     });
-
-    $("setupModelDisplay").addEventListener("click", function() {
-      $("setupModelChooseBtn").click();
-    });
+    $("setupModelDisplay").addEventListener("click", function() { $("setupModelChooseBtn").click(); });
 
     $("setupConnectBtn").addEventListener("click", function() {
       var url = $("setupApiUrl").value.trim();
@@ -501,12 +490,9 @@
       }
       $("setupStatus").textContent = "Teste Verbindung...";
       $("setupStatus").className = "hint";
-
       callBackend("ollama_health", { apiUrl: url }).then(function(ok) {
         if (ok) {
-          settings.apiUrl = url;
-          settings.apiKey = key;
-          settings.model = model || "llama3.2";
+          settings.apiUrl = url; settings.apiKey = key; settings.model = model || "llama3.2";
           setSetting(STORAGE_KEYS.apiUrl, url);
           setSetting(STORAGE_KEYS.apiKey, key);
           setSetting(STORAGE_KEYS.model, settings.model);
@@ -515,7 +501,7 @@
           $("setupStatus").className = "hint success";
           setTimeout(showMainApp, 800);
         } else {
-          $("setupStatus").textContent = "Keine Verbindung zu Ollama unter " + url + ". Pruefe ob Ollama laeuft.";
+          $("setupStatus").textContent = "Keine Verbindung zu Ollama unter " + url + ".";
           $("setupStatus").className = "hint error";
         }
       }).catch(function(err) {
@@ -537,7 +523,6 @@
   }
 
   function loadSetupModels(url, key) {
-    // Lade Modelle und oeffne Modal
     callBackend("ollama_list_models", { apiUrl: url, apiKey: key }).then(function(models) {
       if (models && models.length > 0) {
         openModelModal("setup", models);
@@ -546,7 +531,7 @@
         $("setupModelStatus").className = "hint";
       }
     }).catch(function() {
-      $("setupModelStatus").textContent = "Modelle konnten nicht geladen werden. Bitte manuell eingeben.";
+      $("setupModelStatus").textContent = "Modelle konnten nicht geladen werden.";
       $("setupModelStatus").className = "hint";
     });
   }
@@ -565,12 +550,10 @@
       $("appVersion").textContent = "v" + v;
     }).catch(function() {});
 
-    // Memory-Pfad anzeigen
     callBackend("memory_path", {}).then(function(p) {
       $("memoryPathDisplay").textContent = p;
     }).catch(function() {});
 
-    // Default-System-Prompt laden falls noch keiner gesetzt
     if (!settings.systemPrompt) {
       callBackend("default_system_prompt", {}).then(function(p) {
         settings.systemPrompt = p;
@@ -585,74 +568,51 @@
     updateSessionSelect();
     loadChatFromMemory();
     startStatusTimer();
+    startActivityPolling();
+    startAgentPolling();
 
     setupNavigation();
     setupChat();
-    setupMemory();
-    setupSettings();
+    setupActivity();
+    setupMemoryView();
+    setupSkillsView();
+    setupPasswordManager();
+    setupSettingsEvents();
     setupResponsive();
     setupModelModalEvents();
     setupOllamaConnectEvents();
     setupGlobalEscListener();
+    setupSkillModal();
+    setupMemoryEditModal();
+    setupPwEditModal();
+    setupAgentModal();
+    setupConfirmDialog();
   }
 
-  // --- RESPONSIVE / HAMBURGER MENU ---
+  // --- RESPONSIVE ---
   function setupResponsive() {
     var hamburger = $("hamburgerBtn");
     var sidebar = $("sidebar");
     var backdrop = $("sidebarBackdrop");
     var closeBtn = $("sidebarClose");
 
-    function isMobile() {
-      return window.innerWidth < 700;
-    }
+    function isMobile() { return window.innerWidth < 700; }
+    function openSidebar() { sidebar.classList.add("open"); backdrop.classList.add("visible"); }
+    function closeSidebar() { sidebar.classList.remove("open"); backdrop.classList.remove("visible"); }
 
-    function openSidebar() {
-      if (!sidebar) return;
-      sidebar.classList.add("open");
-      if (backdrop) backdrop.classList.add("visible");
-    }
+    if (hamburger) hamburger.addEventListener("click", function() {
+      if (sidebar.classList.contains("open")) closeSidebar(); else openSidebar();
+    });
+    if (closeBtn) closeBtn.addEventListener("click", closeSidebar);
+    if (backdrop) backdrop.addEventListener("click", closeSidebar);
 
-    function closeSidebar() {
-      if (!sidebar) return;
-      sidebar.classList.remove("open");
-      if (backdrop) backdrop.classList.remove("visible");
-    }
-
-    if (hamburger) {
-      hamburger.addEventListener("click", function() {
-        if (sidebar && sidebar.classList.contains("open")) {
-          closeSidebar();
-        } else {
-          openSidebar();
-        }
-      });
-    }
-
-    if (closeBtn) {
-      closeBtn.addEventListener("click", closeSidebar);
-    }
-
-    if (backdrop) {
-      backdrop.addEventListener("click", closeSidebar);
-    }
-
-    // Window resize listener
     window.addEventListener("resize", function() {
-      var w = window.innerWidth;
-      if (w >= 700) {
-        // Sidebar permanent sichtbar, Hamburger verstecken
-        closeSidebar();
-        if (sidebar) sidebar.style.display = "";
-      } else {
-        if (sidebar) sidebar.style.display = "";
-      }
+      if (window.innerWidth >= 700) { closeSidebar(); sidebar.style.display = ""; }
+      else { sidebar.style.display = ""; }
+      if (brainViewerInitialized) onBrainResize();
     });
 
-    // Initial pruefen
-    if (!isMobile()) {
-      closeSidebar();
-    }
+    if (!isMobile()) closeSidebar();
   }
 
   // --- NAVIGATION ---
@@ -670,14 +630,15 @@
     $("view-" + view).classList.add("active");
     var navBtn = document.querySelector('.nav-item[data-view="' + view + '"]');
     if (navBtn) navBtn.classList.add("active");
-    if (view === "memory") loadMemory();
+    if (view === "memory") { initBrainViewer(); loadMemoryZone("core"); }
     if (view === "skills") loadSkills();
-    // Sidebar bei mobiler Ansicht schliessen nach View-Wechsel
+    if (view === "passwords") loadPasswords();
+    if (view === "activity") loadActivities();
     var sidebar = $("sidebar");
     var backdrop = $("sidebarBackdrop");
-    if (sidebar && window.innerWidth < 700) {
+    if (window.innerWidth < 700) {
       sidebar.classList.remove("open");
-      if (backdrop) backdrop.classList.remove("visible");
+      backdrop.classList.remove("visible");
     }
   }
 
@@ -690,7 +651,7 @@
     callBackend("ollama_health", { apiUrl: settings.apiUrl }).then(function(ok) {
       if (dot) {
         dot.className = "status-dot " + (ok ? "online" : "offline");
-        text.textContent = ok ? "Online" : "Offline";
+        text.textContent = ok ? "Online — " + settings.model : "Offline";
       }
     }).catch(function() {
       if (dot) { dot.className = "status-dot offline"; text.textContent = "Offline"; }
@@ -702,16 +663,137 @@
     statusTimer = setInterval(checkStatus, 30000);
   }
 
-  // --- SESSIONS & CHAT ---
+  // --- ACTIVITY FEED ---
+  var activityTimer = null;
+  var lastActivityCount = 0;
+  var currentActivityFilter = "";
+
+  function startActivityPolling() {
+    loadActivities();
+    if (activityTimer) clearInterval(activityTimer);
+    activityTimer = setInterval(loadActivities, 2000);
+  }
+
+  function setupActivity() {
+    $("clearActivityBtn").addEventListener("click", function() {
+      callBackend("clear_activities", {}).then(function() {
+        loadActivities();
+      }).catch(function() {});
+    });
+    $("activityFilter").addEventListener("change", function() {
+      currentActivityFilter = this.value;
+      loadActivities();
+    });
+  }
+
+  function loadActivities() {
+    callBackend("get_activities", {}).then(function(result) {
+      var activities = [];
+      try {
+        activities = typeof result === "string" ? JSON.parse(result) : result;
+      } catch (e) { activities = []; }
+      if (!Array.isArray(activities)) activities = [];
+
+      // Badge aktualisieren
+      if (activities.length > 0) {
+        var newCount = activities.length;
+        if (newCount > lastActivityCount && lastActivityCount > 0) {
+          var badge = $("activityNavBadge");
+          badge.textContent = newCount - lastActivityCount;
+          badge.style.display = "inline-block";
+        }
+        lastActivityCount = newCount;
+      }
+
+      // Filter
+      var filtered = activities;
+      if (currentActivityFilter) {
+        filtered = activities.filter(function(a) { return a.type === currentActivityFilter; });
+      }
+      renderActivities(filtered.slice(0, 200));
+    }).catch(function() {
+      var list = $("activityList");
+      if (list) list.innerHTML = '<div class="empty-state"><p>Activities nicht verfuegbar.</p></div>';
+    });
+  }
+
+  function renderActivities(activities) {
+    var list = $("activityList");
+    if (!list) return;
+    if (activities.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>Keine Activities.</p></div>';
+      return;
+    }
+    list.innerHTML = "";
+    activities.forEach(function(a) {
+      var row = document.createElement("div");
+      row.className = "activity-row";
+      var ic = ACTIVITY_ICONS[a.type] || { icon: "•", color: "" };
+      var ts = a.timestamp ? formatTimestamp(a.timestamp * 1000) : formatTimestamp(Date.now());
+      row.innerHTML = '<div class="activity-icon ' + ic.color + '">' + ic.icon + '</div>' +
+        '<div class="activity-message">' + escapeHtml(a.message || a.type) + '</div>' +
+        '<div class="activity-timestamp">' + ts + '</div>';
+      list.appendChild(row);
+    });
+  }
+
+  // --- AGENT STATUS POLLING ---
+  var agentTimer = null;
+  function startAgentPolling() {
+    updateAgentStatus();
+    if (agentTimer) clearInterval(agentTimer);
+    agentTimer = setInterval(updateAgentStatus, 3000);
+  }
+
+  function updateAgentStatus() {
+    callBackend("list_agents", {}).then(function(result) {
+      var agents = [];
+      try { agents = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+      if (!Array.isArray(agents)) agents = [];
+      renderAgents(agents);
+    }).catch(function() {
+      var container = $("sidebarAgents");
+      if (container) container.style.display = "none";
+    });
+  }
+
+  function renderAgents(agents) {
+    var container = $("sidebarAgents");
+    var list = $("agentsList");
+    if (!container || !list) return;
+    if (agents.length === 0) {
+      container.style.display = "none";
+      return;
+    }
+    container.style.display = "block";
+    list.innerHTML = "";
+    agents.forEach(function(a) {
+      var item = document.createElement("div");
+      item.className = "agent-item";
+      var status = a.status || "running";
+      var taskPreview = (a.task || "Agent").substring(0, 30);
+      item.innerHTML = '<span class="agent-status-dot ' + status + '"></span>' +
+        '<span class="agent-name">' + escapeHtml(taskPreview) + '</span>' +
+        '<button class="mz-action-btn" data-agent-id="' + escapeHtml(a.id) + '" title="Stoppen">⏹</button>';
+      list.appendChild(item);
+    });
+    list.querySelectorAll("[data-agent-id]").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        callBackend("stop_agent", { agentId: btn.getAttribute("data-agent-id") }).then(function() {
+          updateAgentStatus();
+        }).catch(function() {});
+      });
+    });
+  }
+
+  // --- CHAT: SESSIONS ---
   function loadChatFromMemory() {
-    // Wenn keine current session, erstelle eine
     if (!settings.currentSession) {
       callBackend("memory_create_session", { name: "" }).then(function(sid) {
         settings.currentSession = sid;
         setSetting(STORAGE_KEYS.currentSession, sid);
         loadSessionsList();
       }).catch(function() {
-        // Fallback: lokale ID
         settings.currentSession = generateId();
         setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
       });
@@ -742,9 +824,7 @@
     });
   }
 
-  function updateSessionSelect() {
-    loadSessionsList();
-  }
+  function updateSessionSelect() { loadSessionsList(); }
 
   function loadMessagesForSession(sid) {
     callBackend("memory_get_messages", { sessionId: sid }).then(function(result) {
@@ -812,15 +892,14 @@
     body.innerHTML = renderMarkdown(content);
     contentWrap.appendChild(header);
 
-    // Skill-Badge
     if (skillInfo && skillInfo.skill_name) {
       var badge = document.createElement("div");
       badge.className = "skill-badge " + (skillInfo.success ? "success" : "error");
-      badge.innerHTML = '<span class="skill-badge-icon">⚡</span> Skill: ' + escapeHtml(skillInfo.skill_name) + (skillInfo.success ? " ausgefuehrt" : " fehlgeschlagen");
+      badge.innerHTML = '<span class="skill-badge-icon">🔧</span> Skill: ' + escapeHtml(skillInfo.skill_name) + (skillInfo.success ? " ausgefuehrt" : " fehlgeschlagen");
       contentWrap.appendChild(badge);
       var resultDiv = document.createElement("div");
       resultDiv.className = "skill-result";
-      resultDiv.innerHTML = '<pre>' + escapeHtml(skillInfo.result) + '</pre>';
+      resultDiv.innerHTML = '<pre>' + escapeHtml(skillInfo.result || "") + '</pre>';
       contentWrap.appendChild(resultDiv);
     }
 
@@ -845,19 +924,24 @@
     container.scrollTop = container.scrollHeight;
   }
 
-  // Attached files
-  var attachedFiles = [];
-  function setupFileDrop() {
-    var input = $("chatInput");
-    var hint = $("fileDropHint");
+  // --- ACTIVITY BADGE ---
+  function showChatActivity(text) {
+    var badge = $("chatActivityBadge");
+    $("chatActivityText").textContent = text || "Titan arbeitet...";
+    badge.style.display = "flex";
+  }
+  function hideChatActivity() {
+    $("chatActivityBadge").style.display = "none";
+  }
 
-    document.addEventListener("dragover", function(e) {
-      e.preventDefault();
-      hint.style.display = "block";
-    });
-    document.addEventListener("dragleave", function(e) {
-      if (e.target === document) hint.style.display = "none";
-    });
+  // --- ATTACHED FILES ---
+  var attachedFiles = [];
+  var attachedImages = [];
+
+  function setupFileDrop() {
+    var hint = $("fileDropHint");
+    document.addEventListener("dragover", function(e) { e.preventDefault(); hint.style.display = "block"; });
+    document.addEventListener("dragleave", function(e) { if (e.target === document) hint.style.display = "none"; });
     document.addEventListener("drop", function(e) {
       e.preventDefault();
       hint.style.display = "none";
@@ -867,6 +951,42 @@
       }
       renderAttachedFiles();
     });
+
+    // Bild anhaengen Button
+    $("attachImageBtn").addEventListener("click", function() {
+      $("imageFileInput").click();
+    });
+    $("imageFileInput").addEventListener("change", function() {
+      var file = this.files[0];
+      if (file) {
+        attachedImages.push({ name: file.name, path: file.path });
+        renderAttachedFiles();
+      }
+      this.value = "";
+    });
+
+    // Screenshot Button
+    $("screenshotBtn").addEventListener("click", function() {
+      showChatActivity("Mache Screenshot...");
+      callBackend("screenshot", {}).then(function(result) {
+        hideChatActivity();
+        appendMessage("user", "📸 Screenshot gemacht — wird analysiert...", Date.now(), true);
+        var imagePath = typeof result === "string" ? result : (result && result.path ? result.path : "");
+        if (imagePath) {
+          analyzeImageInternal(imagePath);
+        } else {
+          appendMessage("titan", "Screenshot konnte nicht erstellt werden.", Date.now(), true);
+        }
+      }).catch(function(err) {
+        hideChatActivity();
+        appendMessage("titan", "Screenshot-Fehler: " + err, Date.now(), true);
+      });
+    });
+
+    // Agent starten Button
+    $("agentSpawnBtn").addEventListener("click", function() {
+      openModal("agentModalBackdrop", "agentModal");
+    });
   }
 
   function renderAttachedFiles() {
@@ -875,23 +995,45 @@
     attachedFiles.forEach(function(f, idx) {
       var chip = document.createElement("div");
       chip.className = "file-chip";
-      chip.innerHTML = '<span>📎 ' + escapeHtml(f.name) + '</span><button class="file-remove" data-idx="' + idx + '">×</button>';
+      chip.innerHTML = '<span>📎 ' + escapeHtml(f.name) + '</span><button class="file-remove" data-idx="' + idx + '" data-type="file">x</button>';
+      container.appendChild(chip);
+    });
+    attachedImages.forEach(function(f, idx) {
+      var chip = document.createElement("div");
+      chip.className = "file-chip";
+      chip.innerHTML = '<span>🖼 ' + escapeHtml(f.name) + '</span><button class="file-remove" data-idx="' + idx + '" data-type="image">x</button>';
       container.appendChild(chip);
     });
     container.querySelectorAll(".file-remove").forEach(function(btn) {
       btn.addEventListener("click", function() {
-        attachedFiles.splice(parseInt(btn.getAttribute("data-idx")), 1);
+        var idx = parseInt(btn.getAttribute("data-idx"));
+        var type = btn.getAttribute("data-type");
+        if (type === "file") attachedFiles.splice(idx, 1);
+        else attachedImages.splice(idx, 1);
         renderAttachedFiles();
       });
     });
   }
 
+  function analyzeImageInternal(imagePath) {
+    showChatActivity("Analysiere Bild...");
+    callBackend("analyze_image", { imagePath: imagePath, model: settings.model }).then(function(result) {
+      hideChatActivity();
+      var analysis = typeof result === "string" ? result : (result && result.description ? result.description : JSON.stringify(result));
+      appendMessage("titan", analysis, Date.now(), true);
+      callBackend("log_activity", { type: "action", message: "Bild analysiert" }).catch(function() {});
+    }).catch(function(err) {
+      hideChatActivity();
+      appendMessage("titan", "Vision-Fehler: " + err, Date.now(), true);
+    });
+  }
+
+  // --- SEND MESSAGE ---
   function sendMessage() {
     var input = $("chatInput");
     var text = input.value.trim();
     if (!text) return;
 
-    // Slash-Befehle
     if (text.charAt(0) === "/") {
       handleSlashCommand(text);
       input.value = "";
@@ -904,61 +1046,58 @@
       setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
     }
 
-    // Attached files als Context
+    // Attached files
     var fileContext = "";
-    var filesToProcess = attachedFiles.slice();
-    if (filesToProcess.length > 0) {
-      fileContext = "\n\n[Angehängte Dateien:\n";
-      filesToProcess.forEach(function(f) {
-        fileContext += "- " + f.name + " (" + f.path + ")\n";
-      });
+    if (attachedFiles.length > 0) {
+      fileContext = "\n\n[Angehaengte Dateien:\n";
+      attachedFiles.forEach(function(f) { fileContext += "- " + f.name + " (" + f.path + ")\n"; });
       fileContext += "]";
     }
 
     var ts = Date.now();
     var userMsg = text + fileContext;
-    appendMessage("user", text + (fileContext ? "\n\n📎 " + filesToProcess.length + " Datei(en) angehängt" : ""), ts, true);
+    appendMessage("user", text + (fileContext ? "\n\n📎 " + attachedFiles.length + " Datei(en) angehaengt" : ""), ts, true);
 
-    // Memory: User-Nachricht speichern
-    callBackend("memory_add_message", {
-      sessionId: settings.currentSession,
-      role: "user",
-      content: userMsg
-    }).catch(function() {});
+    // Bilder analysieren
+    if (attachedImages.length > 0) {
+      attachedImages.forEach(function(img) {
+        analyzeImageInternal(img.path);
+      });
+    }
+
+    callBackend("memory_add_message", { sessionId: settings.currentSession, role: "user", content: userMsg }).catch(function() {});
+    callBackend("log_activity", { type: "thinking", message: "Nachricht empfangen" }).catch(function() {});
 
     input.value = "";
     input.style.height = "auto";
     attachedFiles = [];
+    attachedImages = [];
     renderAttachedFiles();
 
     $("typingIndicator").style.display = "flex";
+    showChatActivity("Titan denkt nach...");
     scrollToBottom();
 
-    // Skill-Matching
+    // Skill-Matching (falls verfuegbar)
     var skillPromise = Promise.resolve(null);
     if (settings.skillsEnabled) {
-      skillPromise = callBackend("skills_match", {
-        message: text,
-        systemAccess: settings.systemAccess
-      }).then(function(resultStr) {
+      skillPromise = callBackend("skills_match", { message: text, systemAccess: settings.systemAccess }).then(function(resultStr) {
         try {
           var skillResult = JSON.parse(resultStr);
-          if (skillResult.matched) {
-            return skillResult;
-          }
+          if (skillResult.matched) return skillResult;
         } catch (e) {}
         return null;
       }).catch(function() { return null; });
     }
 
     skillPromise.then(function(skillResult) {
-      // Skill-Badge anzeigen
       if (skillResult) {
         appendMessage("assistant", "", Date.now(), true, skillResult);
+        callBackend("log_activity", { type: "skill", message: "Skill ausgefuehrt: " + skillResult.skill_name }).catch(function() {});
       }
 
-      // LLM-Call
-      var messages = buildLLMMessages(text, skillResult, filesToProcess);
+      var messages = buildLLMMessages(text, skillResult, attachedFiles);
+      showChatActivity("Titan antwortet...");
       callBackend("ollama_chat", {
         apiUrl: settings.apiUrl,
         apiKey: settings.apiKey,
@@ -969,61 +1108,39 @@
         fallbackModels: parseFallbackModels(settings.fallbackModels)
       }).then(function(response) {
         $("typingIndicator").style.display = "none";
+        hideChatActivity();
         appendMessage("assistant", response, Date.now(), true);
-        // Memory: Antwort speichern
-        callBackend("memory_add_message", {
-          sessionId: settings.currentSession,
-          role: "assistant",
-          content: response
-        }).catch(function() {});
+        callBackend("memory_add_message", { sessionId: settings.currentSession, role: "assistant", content: response }).catch(function() {});
+        callBackend("log_activity", { type: "action", message: "Antwort gesendet" }).catch(function() {});
       }).catch(function(err) {
         $("typingIndicator").style.display = "none";
+        hideChatActivity();
         var errText = "Fehler: " + err;
-        if (skillResult) {
-          errText = "LLM nicht erreichbar. Skill wurde jedoch ausgefuehrt.\n\nFehler: " + err;
-        }
+        if (skillResult) errText = "LLM nicht erreichbar. Skill wurde jedoch ausgefuehrt.\n\nFehler: " + err;
         appendMessage("assistant", errText, Date.now(), true);
-        callBackend("memory_add_message", {
-          sessionId: settings.currentSession,
-          role: "assistant",
-          content: errText
-        }).catch(function() {});
+        callBackend("log_activity", { type: "error", message: "Chat-Fehler: " + err }).catch(function() {});
       });
     });
   }
 
   function buildLLMMessages(userText, skillResult, files) {
     var msgs = [];
-    // System-Prompt
     var sysContent = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
     msgs.push({ role: "system", content: sysContent });
-
-    // Vergangene Nachrichten der Session (max 20)
     var sessionMsgs = getSessionMessages();
     var recent = sessionMsgs.slice(-20);
     recent.forEach(function(m) {
       msgs.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
     });
-
-    // Skill-Result als Context
     if (skillResult && skillResult.matched) {
-      var contextText = "Skill '" + skillResult.skill_name + "' wurde ausgefuehrt. Ergebnis:\n" + skillResult.result;
-      msgs.push({ role: "system", content: contextText });
+      msgs.push({ role: "system", content: "Skill '" + skillResult.skill_name + "' wurde ausgefuehrt. Ergebnis:\n" + skillResult.result });
     }
-
-    // Attached files
     if (files && files.length > 0) {
       var fileContext = "Der Nutzer hat folgende Dateien angehaengt:\n";
-      files.forEach(function(f) {
-        fileContext += "- " + f.name + " (Pfad: " + f.path + ")\n";
-      });
-      fileContext += "Du kannst auf diese Dateien zugreifen.";
+      files.forEach(function(f) { fileContext += "- " + f.name + " (Pfad: " + f.path + ")\n"; });
       msgs.push({ role: "system", content: fileContext });
     }
-
-    // User-Nachricht
     msgs.push({ role: "user", content: userText });
-
     return msgs;
   }
 
@@ -1034,22 +1151,69 @@
 
   // --- SLASH COMMANDS ---
   function handleSlashCommand(text) {
-    var cmd = text.toLowerCase().trim();
-    var parts = cmd.split(/\s+/);
-    var command = parts[0];
+    var parts = text.split(/\s+/);
+    var command = parts[0].toLowerCase();
 
     if (command === "/help") {
-      appendMessage("assistant", "**Verfuegbare Befehle:**\n\n- /help — Diese Hilfe\n- /skills — Alle Skills anzeigen\n- /memory — Chat-Historie durchsuchen\n- /new — Neue Sitzung\n- /clear — Aktuelle Sitzung leeren\n- /settings — Einstellungen oeffnen\n\n**Skills (natuerlich eingeben):**\n- oeffne Safari / Terminal / Finder\n- screenshot\n- system info\n- lese datei /pfad\n- liste /verzeichnis\n- web suche begriff\n- datum / uhrzeit", Date.now(), true);
+      appendMessage("assistant", "**Verfuegbare Befehle:**\n\n- /help — Diese Hilfe\n- /skills — Skill Hub oeffnen\n- /memory — Memory Gehirn oeffnen\n- /agent <task> — Agent starten\n- /vision <image> — Bild analysieren\n- /cmd <command> — Befehl ausfuehren\n- /file <path> — Datei lesen\n- /password — Password Manager oeffnen\n- /new — Neue Sitzung\n- /clear — Sitzung leeren\n- /settings — Einstellungen", Date.now(), true);
     } else if (command === "/skills") {
       switchView("skills");
     } else if (command === "/memory") {
       switchView("memory");
+    } else if (command === "/password") {
+      switchView("passwords");
+    } else if (command === "/settings") {
+      switchView("settings");
     } else if (command === "/new") {
       newSession();
     } else if (command === "/clear") {
       clearCurrentSession();
-    } else if (command === "/settings") {
-      switchView("settings");
+    } else if (command === "/agent") {
+      var task = text.substring(command.length).trim();
+      if (task) {
+        $("agentTaskInput").value = task;
+        openModal("agentModalBackdrop", "agentModal");
+      } else {
+        openModal("agentModalBackdrop", "agentModal");
+      }
+    } else if (command === "/vision") {
+      var imagePath = text.substring(command.length).trim();
+      if (imagePath) {
+        appendMessage("user", "/vision " + imagePath, Date.now(), true);
+        analyzeImageInternal(imagePath);
+      } else {
+        appendMessage("assistant", "Bitte Bilddatei angeben: /vision /pfad/zum/bild.jpg", Date.now(), true);
+      }
+    } else if (command === "/cmd") {
+      var cmd = text.substring(command.length).trim();
+      if (cmd) {
+        appendMessage("user", "/cmd " + cmd, Date.now(), true);
+        showChatActivity("Fuehre Befehl aus...");
+        callBackend("execute_command", { command: cmd }).then(function(result) {
+          hideChatActivity();
+          var res = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          appendMessage("assistant", "Befehl ausgefuehrt:\n\n```\n" + res + "\n```", Date.now(), true);
+          callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
+        }).catch(function(err) {
+          hideChatActivity();
+          appendMessage("assistant", "Befehl-Fehler: " + err, Date.now(), true);
+        });
+      }
+    } else if (command === "/file") {
+      var filePath = text.substring(command.length).trim();
+      if (filePath) {
+        appendMessage("user", "/file " + filePath, Date.now(), true);
+        showChatActivity("Lese Datei...");
+        callBackend("read_file", { path: filePath }).then(function(content) {
+          hideChatActivity();
+          var truncated = content.length > 5000 ? content.substring(0, 5000) + "\n... (gekuerzt)" : content;
+          appendMessage("assistant", "Datei: " + filePath + "\n\n```\n" + truncated + "\n```", Date.now(), true);
+          callBackend("log_activity", { type: "file_read", message: filePath }).catch(function() {});
+        }).catch(function(err) {
+          hideChatActivity();
+          appendMessage("assistant", "Datei-Fehler: " + err, Date.now(), true);
+        });
+      }
     } else {
       appendMessage("assistant", "Unbekannter Befehl: " + command + "\nTippe /help fuer alle Befehle.", Date.now(), true);
     }
@@ -1075,17 +1239,11 @@
     if (!sid) return;
     chatHistory[sid] = [];
     renderChatMessages();
-    // Memory-Session loeschen und neue erstellen
-    callBackend("memory_delete_session", { sessionId: sid }).then(function() {
-      newSession();
-    }).catch(function() {});
+    callBackend("memory_delete_session", { sessionId: sid }).then(function() { newSession(); }).catch(function() {});
   }
 
   function selectSession(sid) {
-    if (!sid) {
-      newSession();
-      return;
-    }
+    if (!sid) { newSession(); return; }
     settings.currentSession = sid;
     setSetting(STORAGE_KEYS.currentSession, sid);
     loadMessagesForSession(sid);
@@ -1095,17 +1253,12 @@
   function setupChat() {
     var input = $("chatInput");
     input.addEventListener("keydown", function(e) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
     input.addEventListener("input", function() { autoResize(input); });
     $("sendBtn").addEventListener("click", sendMessage);
     $("newSessionBtn").addEventListener("click", newSession);
-    $("sessionSelect").addEventListener("change", function() {
-      selectSession(this.value);
-    });
+    $("sessionSelect").addEventListener("change", function() { selectSession(this.value); });
     setupFileDrop();
   }
 
@@ -1114,126 +1267,589 @@
     input.style.height = Math.min(input.scrollHeight, 120) + "px";
   }
 
-  // --- MEMORY VIEW ---
-  function setupMemory() {
-    $("refreshMemoryBtn").addEventListener("click", loadMemory);
-    $("memorySearch").addEventListener("input", function() {
-      searchMemory(this.value);
+  // ============ MEMORY 3D GEHIRN ============
+  var brainViewerInitialized = false;
+  var brainScene = null;
+  var brainCamera = null;
+  var brainRenderer = null;
+  var brainControls = null;
+  var brainRaycaster = null;
+  var brainMouse = null;
+  var brainModel = null;
+  var brainZones = [];
+  var brainAutoRotate = true;
+  var brainAnimationId = null;
+  var currentMemoryZone = "core";
+  var hoveredZone = null;
+
+  // Zone-Konfiguration
+  var ZONE_CONFIG = {
+    core: { name: "Core Memory", color: 0x4a9eff, colorHex: "#4a9eff", searchCmd: "memory_search_core", deleteCmd: "memory_delete_core", editCmd: "memory_edit_core", addCmd: "memory_add_core" },
+    skills: { name: "Skills", color: 0x34c759, colorHex: "#34c759", searchCmd: "memory_search_skills", deleteCmd: "memory_delete_skill", addCmd: "memory_add_skill" },
+    sensitive: { name: "Sensitive Data", color: 0xbf5af2, colorHex: "#bf5af2", searchCmd: "memory_search_sensitive", deleteCmd: "memory_delete_sensitive", editCmd: "memory_edit_sensitive", addCmd: "memory_add_sensitive" }
+  };
+
+  function setupMemoryView() {
+    $("refreshMemoryBtn").addEventListener("click", function() {
+      loadMemoryZone(currentMemoryZone);
+      if (!brainViewerInitialized) initBrainViewer();
+    });
+    $("memoryAddBtn").addEventListener("click", function() {
+      openMemoryEditModal(null, currentMemoryZone);
+    });
+    $("memoryZoneSearch").addEventListener("input", function() {
+      searchMemoryZone(currentMemoryZone, this.value);
     });
   }
 
-  var allSessions = [];
-  function loadMemory() {
-    var list = $("memoryList");
-    list.innerHTML = '<div class="empty-state"><p>Lade Memory...</p></div>';
-    callBackend("memory_get_sessions", {}).then(function(result) {
-      try {
-        allSessions = JSON.parse(result);
-        renderMemorySessions("");
-      } catch (e) {
-        list.innerHTML = '<div class="empty-state"><p>Keine Memory-Daten.</p></div>';
+  function initBrainViewer() {
+    if (brainViewerInitialized) return;
+    var canvas = $("brainCanvas");
+    if (!canvas) return;
+    var wrap = $("brainCanvasWrap");
+    var width = wrap.clientWidth;
+    var height = wrap.clientHeight;
+    if (width < 10 || height < 10) {
+      setTimeout(initBrainViewer, 200);
+      return;
+    }
+
+    // Three.js dynamisch laden
+    if (typeof THREE === "undefined") {
+      var script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js";
+      script.onload = function() { initBrainThree(canvas, width, height); };
+      script.onerror = function() {
+        $("brainLoading").textContent = "Three.js konnte nicht geladen werden.";
+      };
+      document.head.appendChild(script);
+    } else {
+      initBrainThree(canvas, width, height);
+    }
+  }
+
+  function initBrainThree(canvas, width, height) {
+    try {
+      brainScene = new THREE.Scene();
+      brainCamera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
+      brainCamera.position.set(0, 0, 5);
+
+      brainRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+      brainRenderer.setPixelRatio(window.devicePixelRatio);
+      brainRenderer.setSize(width, height);
+
+      // Licht
+      var ambient = new THREE.AmbientLight(0x404060, 1.5);
+      brainScene.add(ambient);
+      var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      dirLight.position.set(5, 5, 5);
+      brainScene.add(dirLight);
+      var dirLight2 = new THREE.DirectionalLight(0x4a9eff, 0.5);
+      dirLight2.position.set(-5, -5, 5);
+      brainScene.add(dirLight2);
+
+      // Raycaster
+      brainRaycaster = new THREE.Raycaster();
+      brainMouse = new THREE.Vector2();
+
+      // Versuche GLTFLoader + brain.glb zu laden
+      loadBrainModel(canvas, width, height);
+
+      brainViewerInitialized = true;
+      $("brainLoading").style.display = "none";
+
+      // OrbitControls laden
+      loadOrbitControls(canvas);
+
+      // Event-Listener
+      canvas.addEventListener("click", onBrainClick);
+      canvas.addEventListener("mousemove", onBrainMouseMove);
+      canvas.addEventListener("touchend", onBrainClick);
+
+      // Animation-Loop starten
+      animateBrain();
+    } catch (e) {
+      $("brainLoading").textContent = "Fehler beim Initialisieren: " + e.message;
+    }
+  }
+
+  function loadOrbitControls(canvas) {
+    // OrbitControls als Script laden (nicht als Module, um Kompatibilitaet zu gewaehrleisten)
+    var script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js";
+    script.onload = function() {
+      if (typeof THREE.OrbitControls !== "undefined" && brainCamera && brainRenderer) {
+        brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
+        brainControls.enableDamping = true;
+        brainControls.dampingFactor = 0.05;
+        brainControls.minDistance = 3;
+        brainControls.maxDistance = 15;
+        brainControls.autoRotate = false;
+        // Bei User-Interaktion Auto-Rotation stoppen
+        brainControls.addEventListener("start", function() { brainAutoRotate = false; });
       }
-    }).catch(function() {
-      list.innerHTML = '<div class="empty-state"><p>Memory nicht verfuegbar.</p></div>';
+    };
+    script.onerror = function() {
+      // Fallback: manuelle Mouse-Controls
+      setupManualControls(canvas);
+    };
+    document.head.appendChild(script);
+  }
+
+  function setupManualControls(canvas) {
+    var isDragging = false;
+    var prevX = 0, prevY = 0;
+    canvas.addEventListener("mousedown", function(e) {
+      isDragging = true;
+      prevX = e.clientX;
+      prevY = e.clientY;
+    });
+    canvas.addEventListener("mouseup", function() { isDragging = false; });
+    canvas.addEventListener("mousemove", function(e) {
+      if (!isDragging || !brainModel) return;
+      var dx = e.clientX - prevX;
+      var dy = e.clientY - prevY;
+      brainModel.rotation.y += dx * 0.01;
+      brainModel.rotation.x += dy * 0.01;
+      prevX = e.clientX;
+      prevY = e.clientY;
+    });
+    canvas.addEventListener("wheel", function(e) {
+      e.preventDefault();
+      if (brainCamera) {
+        brainCamera.position.z += e.deltaY * 0.01;
+        brainCamera.position.z = Math.max(3, Math.min(15, brainCamera.position.z));
+      }
     });
   }
 
-  function renderMemorySessions(filter) {
-    var list = $("memoryList");
-    if (allSessions.length === 0) {
-      list.innerHTML = '<div class="empty-state"><p>Keine Sitzungen gefunden.</p></div>';
+  function loadBrainModel(canvas, width, height) {
+    // Versuche GLTFLoader zu laden
+    var gltfScript = document.createElement("script");
+    gltfScript.src = "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js";
+    gltfScript.onload = function() {
+      if (typeof THREE.GLTFLoader !== "undefined") {
+        var loader = new THREE.GLTFLoader();
+        // brain.glb aus assets laden — Tauri serviert assets relativ
+        loader.load("assets/brain.glb",
+          function(gltf) {
+            brainModel = gltf.scene;
+            // Zonen-Markierungen erstellen (falls das Modell sie nicht hat)
+            createBrainZones(brainModel);
+            brainScene.add(brainModel);
+            $("brainLoading").style.display = "none";
+          },
+          function(progress) {
+            $("brainLoading").textContent = "Lade Gehirn... " + Math.round((progress.loaded / progress.total) * 100) + "%";
+          },
+          function(err) {
+            // Fallback: Placeholder-Gehirn erstellen
+            console.log("brain.glb nicht verfuegbar, erstelle Placeholder");
+            createPlaceholderBrain();
+            $("brainLoading").style.display = "none";
+          }
+        );
+      } else {
+        createPlaceholderBrain();
+        $("brainLoading").style.display = "none";
+      }
+    };
+    gltfScript.onerror = function() {
+      createPlaceholderBrain();
+      $("brainLoading").style.display = "none";
+    };
+    document.head.appendChild(gltfScript);
+  }
+
+  // Placeholder-Gehirn: 3 Spheren fuer die 3 Zonen
+  function createPlaceholderBrain() {
+    brainModel = new THREE.Group();
+
+    // Blaue Hemisphaere (Core) — linke Haelfte
+    var coreGeo = new THREE.SphereGeometry(1.5, 32, 32, 0, Math.PI * 0.5, 0, Math.PI * 2);
+    var coreMat = new THREE.MeshPhongMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.85, shininess: 80 });
+    var coreMesh = new THREE.Mesh(coreGeo, coreMat);
+    coreMesh.position.set(-0.3, 0, 0);
+    coreMesh.userData = { zone: "core", name: "Core Memory" };
+    brainModel.add(coreMesh);
+    brainZones.push(coreMesh);
+
+    // Gruene Hemisphaere (Skills) — rechte Haelfte
+    var skillsGeo = new THREE.SphereGeometry(1.5, 32, 32, Math.PI * 0.5, Math.PI * 0.5, 0, Math.PI * 2);
+    var skillsMat = new THREE.MeshPhongMaterial({ color: 0x34c759, transparent: true, opacity: 0.85, shininess: 80 });
+    var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
+    skillsMesh.position.set(0.3, 0, 0);
+    skillsMesh.userData = { zone: "skills", name: "Skills" };
+    brainModel.add(skillsMesh);
+    brainZones.push(skillsMesh);
+
+    // Purple zentrale Sektion (Sensitive) — kleine Sphaere in der Mitte
+    var sensGeo = new THREE.SphereGeometry(0.7, 32, 32);
+    var sensMat = new THREE.MeshPhongMaterial({ color: 0xbf5af2, transparent: true, opacity: 0.9, shininess: 100, emissive: 0xbf5af2, emissiveIntensity: 0.2 });
+    var sensMesh = new THREE.Mesh(sensGeo, sensMat);
+    sensMesh.position.set(0, 0, 0);
+    sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
+    brainModel.add(sensMesh);
+    brainZones.push(sensMesh);
+
+    // Verbindungs-Linien (synapsen-aehnlich)
+    var lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 });
+    for (var i = 0; i < 15; i++) {
+      var start = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
+      var end = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
+      var lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
+      var line = new THREE.Line(lineGeo, lineMat);
+      brainModel.add(line);
+    }
+
+    brainScene.add(brainModel);
+  }
+
+  function createBrainZones(model) {
+    // Wenn brain.glb geladen wurde, erstelle Zonen-Meshes darueber
+    // Suche nach Meshes mit bestimmten Namen oder erstelle Spheren als Overlays
+    // Falls das Modell bereits benannte Zonen hat, nutze diese
+    var hasNamedZones = false;
+    model.traverse(function(child) {
+      if (child.isMesh) {
+        var name = (child.name || "").toLowerCase();
+        if (name.indexOf("core") >= 0) {
+          child.userData = { zone: "core", name: "Core Memory" };
+          if (child.material) child.material.color.setHex(0x4a9eff);
+          brainZones.push(child);
+          hasNamedZones = true;
+        } else if (name.indexOf("skill") >= 0) {
+          child.userData = { zone: "skills", name: "Skills" };
+          if (child.material) child.material.color.setHex(0x34c759);
+          brainZones.push(child);
+          hasNamedZones = true;
+        } else if (name.indexOf("sensitive") >= 0 || name.indexOf("sens") >= 0) {
+          child.userData = { zone: "sensitive", name: "Sensitive Data" };
+          if (child.material) child.material.color.setHex(0xbf5af2);
+          brainZones.push(child);
+          hasNamedZones = true;
+        }
+      }
+    });
+
+    // Falls keine benannten Zonen gefunden wurden, erstelle Overlay-Spheren
+    if (!hasNamedZones) {
+      // Core — linke Haelfte
+      var coreGeo = new THREE.SphereGeometry(0.8, 24, 24, 0, Math.PI);
+      var coreMat = new THREE.MeshPhongMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.4, shininess: 60 });
+      var coreMesh = new THREE.Mesh(coreGeo, coreMat);
+      coreMesh.position.set(-0.8, 0, 0);
+      coreMesh.userData = { zone: "core", name: "Core Memory" };
+      model.add(coreMesh);
+      brainZones.push(coreMesh);
+
+      // Skills — rechte Haelfte
+      var skillsGeo = new THREE.SphereGeometry(0.8, 24, 24, Math.PI, Math.PI);
+      var skillsMat = new THREE.MeshPhongMaterial({ color: 0x34c759, transparent: true, opacity: 0.4, shininess: 60 });
+      var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
+      skillsMesh.position.set(0.8, 0, 0);
+      skillsMesh.userData = { zone: "skills", name: "Skills" };
+      model.add(skillsMesh);
+      brainZones.push(skillsMesh);
+
+      // Sensitive — zentrale Sphaere
+      var sensGeo = new THREE.SphereGeometry(0.5, 24, 24);
+      var sensMat = new THREE.MeshPhongMaterial({ color: 0xbf5af2, transparent: true, opacity: 0.5, shininess: 80, emissive: 0xbf5af2, emissiveIntensity: 0.15 });
+      var sensMesh = new THREE.Mesh(sensGeo, sensMat);
+      sensMesh.position.set(0, 0, 0);
+      sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
+      model.add(sensMesh);
+      brainZones.push(sensMesh);
+    }
+  }
+
+  function onBrainClick(event) {
+    if (!brainRaycaster || !brainCamera) return;
+    var rect = event.target.getBoundingClientRect();
+    var x = (event.clientX !== undefined ? event.clientX : (event.changedTouches && event.changedTouches[0].clientX)) - rect.left;
+    var y = (event.clientY !== undefined ? event.clientY : (event.changedTouches && event.changedTouches[0].clientY)) - rect.top;
+    brainMouse.x = (x / rect.width) * 2 - 1;
+    brainMouse.y = -(y / rect.height) * 2 + 1;
+    brainRaycaster.setFromCamera(brainMouse, brainCamera);
+    var intersects = brainRaycaster.intersectObjects(brainZones);
+    if (intersects.length > 0) {
+      var zone = intersects[0].object.userData.zone;
+      brainAutoRotate = false;
+      loadMemoryZone(zone);
+    }
+  }
+
+  function onBrainMouseMove(event) {
+    if (!brainRaycaster || !brainCamera) return;
+    var rect = event.target.getBoundingClientRect();
+    brainMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    brainMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    brainRaycaster.setFromCamera(brainMouse, brainCamera);
+    var intersects = brainRaycaster.intersectObjects(brainZones);
+    var tooltip = $("brainTooltip");
+    if (intersects.length > 0) {
+      var zoneData = intersects[0].object.userData;
+      if (zoneData && zoneData.zone) {
+        var zc = ZONE_CONFIG[zoneData.zone];
+        if (zc) {
+          tooltip.textContent = zc.name;
+          tooltip.style.display = "block";
+          tooltip.style.left = (event.clientX - rect.left + 10) + "px";
+          tooltip.style.top = (event.clientY - rect.top + 10) + "px";
+          // Glow-Effekt
+          if (hoveredZone !== intersects[0].object) {
+            if (hoveredZone && hoveredZone.material) {
+              hoveredZone.material.emissiveIntensity = hoveredZone.userData.originalEmissive || 0;
+            }
+            hoveredZone = intersects[0].object;
+            if (hoveredZone.material) {
+              hoveredZone.userData.originalEmissive = hoveredZone.material.emissiveIntensity || 0;
+              hoveredZone.material.emissive = new THREE.Color(zc.color);
+              hoveredZone.material.emissiveIntensity = 0.4;
+            }
+          }
+          event.target.style.cursor = "pointer";
+          return;
+        }
+      }
+    }
+    tooltip.style.display = "none";
+    if (hoveredZone && hoveredZone.material) {
+      hoveredZone.material.emissiveIntensity = hoveredZone.userData.originalEmissive || 0;
+    }
+    hoveredZone = null;
+    event.target.style.cursor = "default";
+  }
+
+  function animateBrain() {
+    brainAnimationId = requestAnimationFrame(animateBrain);
+    if (brainModel && brainAutoRotate) {
+      brainModel.rotation.y += 0.005;
+    }
+    if (brainControls) brainControls.update();
+    if (brainRenderer && brainScene && brainCamera) {
+      brainRenderer.render(brainScene, brainCamera);
+    }
+  }
+
+  function onBrainResize() {
+    var wrap = $("brainCanvasWrap");
+    if (!wrap || !brainRenderer || !brainCamera) return;
+    var w = wrap.clientWidth;
+    var h = wrap.clientHeight;
+    if (w < 10 || h < 10) return;
+    brainCamera.aspect = w / h;
+    brainCamera.updateProjectionMatrix();
+    brainRenderer.setSize(w, h);
+  }
+
+  // --- MEMORY ZONE LIST ---
+  function loadMemoryZone(zone) {
+    currentMemoryZone = zone;
+    var zc = ZONE_CONFIG[zone];
+    if (!zc) return;
+    $("zonePanelTitle").textContent = zc.name;
+    $("memoryAddBtn").style.display = "inline-flex";
+    var list = $("memoryZoneList");
+    list.innerHTML = '<div class="empty-state"><p>Lade ' + zc.name + '...</p></div>';
+    callBackend(zc.searchCmd, { query: "" }).then(function(result) {
+      var entries = [];
+      try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+      if (!Array.isArray(entries)) entries = [];
+      renderMemoryZoneEntries(entries, zone);
+    }).catch(function() {
+      // Fallback: memory_get_zone
+      callBackend("memory_get_zone", { zone: zone }).then(function(result) {
+        var entries = [];
+        try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+        if (!Array.isArray(entries)) entries = [];
+        renderMemoryZoneEntries(entries, zone);
+      }).catch(function() {
+        list.innerHTML = '<div class="empty-state"><p>' + zc.name + ' nicht verfuegbar.</p></div>';
+      });
+    });
+  }
+
+  function searchMemoryZone(zone, query) {
+    var zc = ZONE_CONFIG[zone];
+    if (!zc) return;
+    callBackend(zc.searchCmd, { query: query }).then(function(result) {
+      var entries = [];
+      try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+      if (!Array.isArray(entries)) entries = [];
+      renderMemoryZoneEntries(entries, zone);
+    }).catch(function() {
+      callBackend("memory_get_zone", { zone: zone }).then(function(result) {
+        var entries = [];
+        try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+        if (!Array.isArray(entries)) entries = [];
+        if (query) {
+          var q = query.toLowerCase();
+          entries = entries.filter(function(e) {
+            return (e.key || e.title || "").toLowerCase().indexOf(q) >= 0 ||
+                   (e.value || "").toLowerCase().indexOf(q) >= 0;
+          });
+        }
+        renderMemoryZoneEntries(entries, zone);
+      }).catch(function() {});
+    });
+  }
+
+  function renderMemoryZoneEntries(entries, zone) {
+    var list = $("memoryZoneList");
+    if (entries.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>Keine Eintraege in dieser Zone.</p></div>';
       return;
     }
     list.innerHTML = "";
-    allSessions.forEach(function(s) {
-      if (filter && s.name.toLowerCase().indexOf(filter) < 0) return;
+    entries.forEach(function(entry) {
       var item = document.createElement("div");
-      item.className = "memory-item";
-      var date = new Date(s.created_at * 1000).toLocaleString("de-DE");
-      item.innerHTML = '<div class="memory-item-header"><span class="memory-hash">' + escapeHtml(s.name) + '</span><span class="memory-date">' + escapeHtml(date) + '</span></div><div class="memory-message">' + s.message_count + ' Nachrichten — <button class="btn-link memory-load" data-id="' + escapeHtml(s.id) + '">Laden</button> <button class="btn-link memory-delete" data-id="' + escapeHtml(s.id) + '">Loeschen</button></div>';
+      item.className = "memory-zone-item";
+      var key = entry.key || entry.title || entry.id || "Eintrag";
+      var value = entry.value || entry.content || "";
+      var truncated = value.length > 200 ? value.substring(0, 200) + "..." : value;
+      var ts = entry.timestamp ? new Date(entry.timestamp * 1000).toLocaleString("de-DE") : "";
+      var tags = entry.tags || [];
+      var tagsHtml = "";
+      if (Array.isArray(tags)) {
+        tags.forEach(function(t) { tagsHtml += '<span class="mz-item-tag">' + escapeHtml(t) + '</span>'; });
+      }
+      var id = entry.id || entry.key || "";
+      item.innerHTML =
+        '<div class="mz-item-header">' +
+          '<span class="mz-item-key">' + escapeHtml(key) + '</span>' +
+          '<div class="mz-item-actions">' +
+            '<button class="mz-action-btn edit" data-id="' + escapeHtml(id) + '" title="Bearbeiten">✏️</button>' +
+            '<button class="mz-action-btn delete" data-id="' + escapeHtml(id) + '" title="Loeschen">🗑</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="mz-item-value">' + escapeHtml(truncated) + '</div>' +
+        '<div class="mz-item-meta">' +
+          (ts ? '<span>' + ts + '</span>' : "") +
+          tagsHtml +
+        '</div>';
       list.appendChild(item);
     });
-    list.querySelectorAll(".memory-load").forEach(function(btn) {
-      btn.addEventListener("click", function() {
-        var sid = btn.getAttribute("data-id");
-        settings.currentSession = sid;
-        setSetting(STORAGE_KEYS.currentSession, sid);
-        loadMessagesForSession(sid);
-        switchView("chat");
-      });
-    });
-    list.querySelectorAll(".memory-delete").forEach(function(btn) {
-      btn.addEventListener("click", function() {
-        var sid = btn.getAttribute("data-id");
-        if (!confirm("Sitzung wirklich loeschen?")) return;
-        callBackend("memory_delete_session", { sessionId: sid }).then(function() {
-          loadMemory();
-        }).catch(function() {});
-      });
-    });
-  }
 
-  function searchMemory(query) {
-    if (!query) {
-      renderMemorySessions("");
-      return;
-    }
-    var list = $("memoryList");
-    list.innerHTML = '<div class="empty-state"><p>Suche...</p></div>';
-    callBackend("memory_search", { query: query }).then(function(result) {
-      try {
-        var results = JSON.parse(result);
-        if (results.length === 0) {
-          list.innerHTML = '<div class="empty-state"><p>Keine Treffer fuer "' + escapeHtml(query) + '".</p></div>';
-          return;
-        }
-        list.innerHTML = "";
-        results.forEach(function(r) {
-          var item = document.createElement("div");
-          item.className = "memory-item";
-          var date = new Date(r.timestamp * 1000).toLocaleString("de-DE");
-          item.innerHTML = '<div class="memory-item-header"><span class="memory-hash">' + escapeHtml(r.session_name) + ' — ' + escapeHtml(r.role) + '</span><span class="memory-date">' + escapeHtml(date) + '</span></div><div class="memory-message">' + escapeHtml(r.content) + '</div>';
-          list.appendChild(item);
+    // Edit/Delete Buttons
+    list.querySelectorAll(".mz-action-btn.edit").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var entry = entries.find(function(e) { return (e.id || e.key) === id; });
+        if (entry) openMemoryEditModal(entry, zone);
+      });
+    });
+    list.querySelectorAll(".mz-action-btn.delete").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var zc = ZONE_CONFIG[zone];
+        if (!zc) return;
+        showConfirm("Loeschen", "Eintrag wirklich loeschen?", function() {
+          callBackend(zc.deleteCmd, { key: id }).then(function() {
+            loadMemoryZone(zone);
+          }).catch(function() {});
+          closeModal("confirmBackdrop", "confirmModal");
         });
-      } catch (e) {
-        list.innerHTML = '<div class="empty-state"><p>Suchfehler.</p></div>';
-      }
-    }).catch(function() {
-      list.innerHTML = '<div class="empty-state"><p>Suche fehlgeschlagen.</p></div>';
+      });
     });
   }
 
-  // --- SKILLS VIEW ---
-  function setupSettings() {
-    // Settings wird in initSettings + setupSettings zusammen behandelt
+  // --- MEMORY EDIT MODAL ---
+  var memoryEditZone = "core";
+  var memoryEditId = null;
+
+  function setupMemoryEditModal() {
+    $("memoryEditClose").addEventListener("click", function() { closeModal("memoryEditBackdrop", "memoryEditModal"); });
+    $("memoryEditBackdrop").addEventListener("click", function() { closeModal("memoryEditBackdrop", "memoryEditModal"); });
+    $("memoryEditCancel").addEventListener("click", function() { closeModal("memoryEditBackdrop", "memoryEditModal"); });
+    $("memoryEditSave").addEventListener("click", function() {
+      var key = $("memoryEditKey").value.trim();
+      var value = $("memoryEditValue").value.trim();
+      var tags = $("memoryEditTags").value.trim();
+      if (!key || !value) return;
+      var zc = ZONE_CONFIG[memoryEditZone];
+      if (!zc) return;
+      var args = { key: key, value: value, tags: tags };
+      var cmd = memoryEditId ? zc.editCmd : zc.addCmd;
+      if (memoryEditId) args.id = memoryEditId;
+      callBackend(cmd, args).then(function() {
+        closeModal("memoryEditBackdrop", "memoryEditModal");
+        loadMemoryZone(memoryEditZone);
+      }).catch(function(err) {
+        alert("Fehler beim Speichern: " + err);
+      });
+    });
   }
 
-  function loadSkills() {
+  function openMemoryEditModal(entry, zone) {
+    memoryEditZone = zone;
+    memoryEditId = entry ? (entry.id || entry.key) : null;
+    $("memoryEditTitle").textContent = entry ? "Eintrag bearbeiten" : "Neuer Eintrag";
+    $("memoryEditKey").value = entry ? (entry.key || entry.title || "") : "";
+    $("memoryEditValue").value = entry ? (entry.value || entry.content || "") : "";
+    var tags = entry && entry.tags ? (Array.isArray(entry.tags) ? entry.tags.join(", ") : entry.tags) : "";
+    $("memoryEditTags").value = tags;
+    openModal("memoryEditBackdrop", "memoryEditModal");
+  }
+
+  // ============ SKILL HUB ============
+  function setupSkillsView() {
+    $("skillsSearch").addEventListener("input", function() {
+      loadSkills(this.value);
+    });
+    $("skillsCategoryFilter").addEventListener("change", function() {
+      loadSkills($("skillsSearch").value, this.value);
+    });
+    $("customSkillBtn").addEventListener("click", function() {
+      // Custom Skill Dialog
+      var name = prompt("Skill-Name:");
+      if (!name) return;
+      var desc = prompt("Beschreibung:") || "";
+      var cmd = prompt("Command Template (z.B. echo {param1}):") || "";
+      callBackend("add_custom_skill", { name: name, description: desc, command: cmd }).then(function() {
+        loadSkills();
+      }).catch(function(err) {
+        alert("Fehler: " + err);
+      });
+    });
+  }
+
+  function loadSkills(filter, category) {
     var grid = $("skillsGrid");
+    if (!grid) return;
     grid.innerHTML = '<div class="empty-state"><p>Lade Skills...</p></div>';
-    callBackend("skills_list", {}).then(function(result) {
-      try {
-        var skills = JSON.parse(result);
-        renderSkills(skills, "");
-      } catch (e) {
-        grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
-      }
+    callBackend("list_skills", {}).then(function(result) {
+      var skills = [];
+      try { skills = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+      if (!Array.isArray(skills)) skills = [];
+      renderSkills(skills, filter || "", category || "");
     }).catch(function() {
-      grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
+      // Fallback: alte API
+      callBackend("skills_list", {}).then(function(result) {
+        var skills = [];
+        try { skills = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+        if (!Array.isArray(skills)) skills = [];
+        renderSkills(skills, filter || "", category || "");
+      }).catch(function() {
+        grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
+      });
     });
   }
 
-  function renderSkills(skills, filter) {
+  function renderSkills(skills, filter, category) {
     var grid = $("skillsGrid");
     var count = $("skillsCount");
     var filtered = skills;
     if (filter) {
       var f = filter.toLowerCase();
-      filtered = skills.filter(function(s) {
+      filtered = filtered.filter(function(s) {
         return (s.name || "").toLowerCase().indexOf(f) >= 0 ||
                (s.description || "").toLowerCase().indexOf(f) >= 0 ||
                (s.category || "").toLowerCase().indexOf(f) >= 0;
       });
+    }
+    if (category) {
+      filtered = filtered.filter(function(s) { return (s.category || "") === category; });
     }
     count.textContent = filtered.length;
     if (filtered.length === 0) {
@@ -1245,12 +1861,407 @@
       var card = document.createElement("div");
       card.className = "skill-card";
       var sysBadge = s.requires_system ? '<span class="skill-badge-sys">System</span>' : "";
-      card.innerHTML = '<div class="skill-name">' + escapeHtml(s.name) + sysBadge + '</div><div class="skill-desc">' + escapeHtml(s.description) + '</div><span class="skill-category">' + escapeHtml(s.category) + '</span>';
+      var icon = s.icon || "🔧";
+      card.innerHTML =
+        '<div class="skill-name">' + icon + " " + escapeHtml(s.name || "") + " " + sysBadge + '</div>' +
+        '<div class="skill-desc">' + escapeHtml(s.description || "") + '</div>' +
+        '<span class="skill-category">' + escapeHtml(s.category || "Utilities") + '</span>';
+      card.addEventListener("click", function() { openSkillModal(s); });
       grid.appendChild(card);
     });
   }
 
-  // --- SETTINGS ---
+  // --- SKILL MODAL ---
+  var currentSkill = null;
+
+  function setupSkillModal() {
+    $("skillModalClose").addEventListener("click", function() { closeModal("skillModalBackdrop", "skillModal"); });
+    $("skillModalBackdrop").addEventListener("click", function() { closeModal("skillModalBackdrop", "skillModal"); });
+    $("skillExecuteBtn").addEventListener("click", function() {
+      if (!currentSkill) return;
+      var params = {};
+      var paramInputs = $("skillModalParams").querySelectorAll("input, textarea, select");
+      paramInputs.forEach(function(inp) {
+        params[inp.getAttribute("data-param")] = inp.value;
+      });
+      $("skillExecuteBtn").disabled = true;
+      $("skillExecuteBtn").textContent = "Fuehre aus...";
+      callBackend("execute_skill", { skillName: currentSkill.name, params: params }).then(function(result) {
+        $("skillExecuteBtn").disabled = false;
+        $("skillExecuteBtn").textContent = "Ausfuehren";
+        $("skillResultArea").style.display = "block";
+        var res = result;
+        if (typeof result === "object") {
+          res = "Exit-Code: " + (result.exit_code || 0) + "\n\nSTDOUT:\n" + (result.stdout || "") + "\n\nSTDERR:\n" + (result.stderr || "");
+        }
+        $("skillResultBox").textContent = res;
+        $("skillToChatBtn").style.display = "inline-flex";
+        $("skillToChatBtn").setAttribute("data-result", encodeURIComponent(res));
+      }).catch(function(err) {
+        $("skillExecuteBtn").disabled = false;
+        $("skillExecuteBtn").textContent = "Ausfuehren";
+        $("skillResultArea").style.display = "block";
+        $("skillResultBox").textContent = "Fehler: " + err;
+      });
+    });
+    $("skillToChatBtn").addEventListener("click", function() {
+      var result = decodeURIComponent($("skillToChatBtn").getAttribute("data-result") || "");
+      closeModal("skillModalBackdrop", "skillModal");
+      switchView("chat");
+      appendMessage("user", "Skill-Ergebnis:", Date.now(), true);
+      appendMessage("titan", "```\n" + result + "\n```", Date.now(), true);
+    });
+  }
+
+  function openSkillModal(skill) {
+    currentSkill = skill;
+    $("skillModalTitle").textContent = skill.name || "Skill";
+    $("skillModalDesc").textContent = skill.description || "";
+    $("skillResultArea").style.display = "none";
+    $("skillToChatBtn").style.display = "none";
+
+    // Parameter-Inputs generieren
+    var paramsContainer = $("skillModalParams");
+    paramsContainer.innerHTML = "";
+    var params = skill.parameters || skill.params || [];
+    if (Array.isArray(params) && params.length > 0) {
+      params.forEach(function(p) {
+        var grp = document.createElement("div");
+        grp.className = "form-group";
+        var label = document.createElement("label");
+        label.textContent = p.name || p;
+        grp.appendChild(label);
+        var inp = document.createElement("input");
+        inp.type = "text";
+        inp.setAttribute("data-param", p.name || p);
+        inp.placeholder = p.description || p.placeholder || "";
+        grp.appendChild(inp);
+        paramsContainer.appendChild(grp);
+      });
+    }
+    openModal("skillModalBackdrop", "skillModal");
+  }
+
+  // ============ PASSWORD MANAGER ============
+  var pwCurrentGroup = "";
+  var pwAllEntries = [];
+
+  function setupPasswordManager() {
+    $("pwSearch").addEventListener("input", function() { renderPasswords(this.value); });
+    $("pwExportBtn").addEventListener("click", exportPasswords);
+    $("pwImportBtn").addEventListener("click", function() { $("pwImportInput").click(); });
+    $("pwImportInput").addEventListener("change", function() {
+      var file = this.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var content = e.target.result;
+        callBackend("password_manager_import", { data: content, format: file.name.endsWith(".csv") ? "csv" : "json" }).then(function() {
+          loadPasswords();
+        }).catch(function(err) { alert("Import-Fehler: " + err); });
+      };
+      reader.readAsText(file);
+      this.value = "";
+    });
+    $("pwAddBtn").addEventListener("click", function() { openPwEditModal(null); });
+
+    // Tabs
+    $$(".pw-tab").forEach(function(tab) {
+      tab.addEventListener("click", function() {
+        $$(".pw-tab").forEach(function(t) { t.classList.remove("active"); });
+        tab.classList.add("active");
+        pwCurrentGroup = tab.getAttribute("data-group");
+        renderPasswords($("pwSearch").value);
+      });
+    });
+  }
+
+  function loadPasswords() {
+    var list = $("pwList");
+    list.innerHTML = '<div class="empty-state"><p>Lade Passwort-Manager...</p></div>';
+    callBackend("password_manager_list", {}).then(function(result) {
+      try {
+        pwAllEntries = typeof result === "string" ? JSON.parse(result) : result;
+      } catch (e) { pwAllEntries = []; }
+      if (!Array.isArray(pwAllEntries)) pwAllEntries = [];
+      renderPasswords($("pwSearch").value);
+    }).catch(function() {
+      // Fallback: memory_get_zone sensitive
+      callBackend("memory_get_zone", { zone: "sensitive" }).then(function(result) {
+        try { pwAllEntries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) { pwAllEntries = []; }
+        if (!Array.isArray(pwAllEntries)) pwAllEntries = [];
+        renderPasswords($("pwSearch").value);
+      }).catch(function() {
+        list.innerHTML = '<div class="empty-state"><p>Passwort-Manager nicht verfuegbar.</p></div>';
+      });
+    });
+  }
+
+  function renderPasswords(searchQuery) {
+    var list = $("pwList");
+    var entries = pwAllEntries;
+    // Gruppe filtern
+    if (pwCurrentGroup) {
+      entries = entries.filter(function(e) { return (e.group || e.category || "") === pwCurrentGroup; });
+    }
+    // Suche
+    if (searchQuery) {
+      var q = searchQuery.toLowerCase();
+      entries = entries.filter(function(e) {
+        return (e.title || e.key || "").toLowerCase().indexOf(q) >= 0 ||
+               (e.username || "").toLowerCase().indexOf(q) >= 0 ||
+               (e.url || "").toLowerCase().indexOf(q) >= 0 ||
+               (e.email || "").toLowerCase().indexOf(q) >= 0;
+      });
+    }
+
+    if (entries.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>Keine Eintraege gefunden.</p></div>';
+      return;
+    }
+
+    list.innerHTML = "";
+    entries.forEach(function(entry) {
+      var item = document.createElement("div");
+      item.className = "pw-item";
+      var id = entry.id || entry.key || "";
+      var title = entry.title || entry.key || "Eintrag";
+      var username = entry.username || "";
+      var url = entry.url || "";
+      var email = entry.email || "";
+      var group = entry.group || entry.category || "Sonstiges";
+      var links = entry.links || [];
+      var revealed = false;
+
+      item.innerHTML =
+        '<div class="pw-item-header">' +
+          '<span class="pw-item-title">' + escapeHtml(title) + '</span>' +
+          '<span class="pw-item-group">' + escapeHtml(group) + '</span>' +
+        '</div>' +
+        '<div class="pw-item-fields">' +
+          (username ? '<div class="pw-field"><span class="pw-field-label">Username</span><span class="pw-field-value">' + escapeHtml(username) + '</span></div>' : "") +
+          '<div class="pw-field"><span class="pw-field-label">Wert</span><span class="pw-field-value masked" data-id="' + escapeHtml(id) + '">••••••••</span></div>' +
+          (url ? '<div class="pw-field"><span class="pw-field-label">URL</span><span class="pw-field-value">' + escapeHtml(url) + '</span></div>' : "") +
+          (email ? '<div class="pw-field"><span class="pw-field-label">E-Mail</span><span class="pw-field-value">' + escapeHtml(email) + '</span></div>' : "") +
+        '</div>' +
+        (links && links.length > 0 ? '<div class="pw-item-links">' + links.map(function(l) { return '<span class="pw-link-badge">' + escapeHtml(l) + '</span>'; }).join("") + '</div>' : "") +
+        '<div class="pw-item-actions">' +
+          '<button class="pw-action-btn show" data-id="' + escapeHtml(id) + '">Anzeigen</button>' +
+          '<button class="pw-action-btn copy" data-id="' + escapeHtml(id) + '">Kopieren</button>' +
+          '<button class="pw-action-btn edit" data-id="' + escapeHtml(id) + '">Bearbeiten</button>' +
+          '<button class="pw-action-btn delete" data-id="' + escapeHtml(id) + '">Loeschen</button>' +
+        '</div>';
+
+      list.appendChild(item);
+    });
+
+    // Event-Listener
+    list.querySelectorAll(".pw-action-btn.show").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var entry = entries.find(function(e) { return (e.id || e.key) === id; });
+        if (!entry) return;
+        var valueField = btn.closest(".pw-item").querySelector(".pw-field-value.masked");
+        if (btn.textContent === "Anzeigen") {
+          // Wert entschluesseln/anzeigen
+          callBackend("password_manager_search", { query: entry.title || entry.key || "" }).then(function(result) {
+            var found = null;
+            try {
+              var resArr = typeof result === "string" ? JSON.parse(result) : result;
+              if (Array.isArray(resArr)) {
+                found = resArr.find(function(e) { return (e.id || e.key) === id; });
+              }
+            } catch (e) {}
+            var value = (found && found.value) ? found.value : (entry.value || "Nicht verfuegbar");
+            valueField.classList.remove("masked");
+            valueField.textContent = value;
+            btn.textContent = "Verbergen";
+          }).catch(function() {
+            var value = entry.value || "Nicht verfuegbar";
+            valueField.classList.remove("masked");
+            valueField.textContent = value;
+            btn.textContent = "Verbergen";
+          });
+        } else {
+          valueField.classList.add("masked");
+          valueField.textContent = "••••••••";
+          btn.textContent = "Anzeigen";
+        }
+      });
+    });
+
+    list.querySelectorAll(".pw-action-btn.copy").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var entry = entries.find(function(e) { return (e.id || e.key) === id; });
+        if (!entry) return;
+        callBackend("password_manager_search", { query: entry.title || entry.key || "" }).then(function(result) {
+          var found = null;
+          try {
+            var resArr = typeof result === "string" ? JSON.parse(result) : result;
+            if (Array.isArray(resArr)) found = resArr.find(function(e) { return (e.id || e.key) === id; });
+          } catch (e) {}
+          var value = (found && found.value) ? found.value : (entry.value || "");
+          callBackend("clipboard_write", { text: value }).then(function() {
+            btn.textContent = "Kopiert!";
+            setTimeout(function() { btn.textContent = "Kopieren"; }, 2000);
+          }).catch(function() {
+            navigator.clipboard.writeText(value).then(function() {
+              btn.textContent = "Kopiert!";
+              setTimeout(function() { btn.textContent = "Kopieren"; }, 2000);
+            });
+          });
+        }).catch(function() {
+          var value = entry.value || "";
+          navigator.clipboard.writeText(value).then(function() {
+            btn.textContent = "Kopiert!";
+            setTimeout(function() { btn.textContent = "Kopieren"; }, 2000);
+          });
+        });
+      });
+    });
+
+    list.querySelectorAll(".pw-action-btn.edit").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var entry = entries.find(function(e) { return (e.id || e.key) === id; });
+        if (entry) openPwEditModal(entry);
+      });
+    });
+
+    list.querySelectorAll(".pw-action-btn.delete").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var id = btn.getAttribute("data-id");
+        var entry = entries.find(function(e) { return (e.id || e.key) === id; });
+        var title = entry ? (entry.title || entry.key) : id;
+        showConfirm("Loeschen", "Eintrag \"" + title + "\" wirklich loeschen?", function() {
+          callBackend("password_manager_delete", { id: id }).then(function() {
+            loadPasswords();
+          }).catch(function() {
+            callBackend("memory_delete_sensitive", { key: id }).then(function() { loadPasswords(); }).catch(function() {});
+          });
+          closeModal("confirmBackdrop", "confirmModal");
+        });
+      });
+    });
+  }
+
+  function exportPasswords() {
+    callBackend("password_manager_export", {}).then(function(result) {
+      var data = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      var blob = new Blob([data], {type: "application/json"});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "titan-toti-passwords-" + Date.now() + ".json";
+      a.click();
+      URL.revokeObjectURL(url);
+    }).catch(function(err) {
+      // Fallback: manuell exportieren
+      var blob = new Blob([JSON.stringify(pwAllEntries, null, 2)], {type: "application/json"});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "titan-toti-passwords-" + Date.now() + ".json";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  // --- PW EDIT MODAL ---
+  var pwEditId = null;
+
+  function setupPwEditModal() {
+    $("pwEditClose").addEventListener("click", function() { closeModal("pwEditBackdrop", "pwEditModal"); });
+    $("pwEditBackdrop").addEventListener("click", function() { closeModal("pwEditBackdrop", "pwEditModal"); });
+    $("pwEditCancel").addEventListener("click", function() { closeModal("pwEditBackdrop", "pwEditModal"); });
+    $("pwEditSave").addEventListener("click", function() {
+      var data = {
+        title: $("pwEditTitleField").value.trim(),
+        username: $("pwEditUsername").value.trim(),
+        value: $("pwEditValue").value.trim(),
+        url: $("pwEditUrl").value.trim(),
+        email: $("pwEditEmail").value.trim(),
+        group: $("pwEditGroup").value,
+        notes: $("pwEditNotes").value.trim()
+      };
+      if (!data.title || !data.value) {
+        alert("Titel und Wert sind Pflichtfelder.");
+        return;
+      }
+      if (pwEditId) {
+        data.id = pwEditId;
+        callBackend("password_manager_edit", data).then(function() {
+          closeModal("pwEditBackdrop", "pwEditModal");
+          loadPasswords();
+        }).catch(function() {
+          // Fallback: memory_edit_sensitive
+          callBackend("memory_edit_sensitive", { key: pwEditId, value: JSON.stringify(data) }).then(function() {
+            closeModal("pwEditBackdrop", "pwEditModal");
+            loadPasswords();
+          }).catch(function(err) { alert("Fehler: " + err); });
+        });
+      } else {
+        callBackend("password_manager_add", data).then(function() {
+          closeModal("pwEditBackdrop", "pwEditModal");
+          loadPasswords();
+        }).catch(function() {
+          // Fallback
+          callBackend("memory_add_sensitive", { key: data.title, value: JSON.stringify(data) }).then(function() {
+            closeModal("pwEditBackdrop", "pwEditModal");
+            loadPasswords();
+          }).catch(function(err) { alert("Fehler: " + err); });
+        });
+      }
+    });
+  }
+
+  function openPwEditModal(entry) {
+    pwEditId = entry ? (entry.id || entry.key) : null;
+    $("pwEditTitle").textContent = entry ? "Eintrag bearbeiten" : "Neuer Eintrag";
+    $("pwEditTitleField").value = entry ? (entry.title || entry.key || "") : "";
+    $("pwEditUsername").value = entry ? (entry.username || "") : "";
+    $("pwEditValue").value = entry ? (entry.value || "") : "";
+    $("pwEditUrl").value = entry ? (entry.url || "") : "";
+    $("pwEditEmail").value = entry ? (entry.email || "") : "";
+    $("pwEditGroup").value = entry ? (entry.group || entry.category || "Passwoerter") : "Passwoerter";
+    $("pwEditNotes").value = entry ? (entry.notes || "") : "";
+    openModal("pwEditBackdrop", "pwEditModal");
+  }
+
+  // ============ AGENT MODAL ============
+  function setupAgentModal() {
+    $("agentModalClose").addEventListener("click", function() { closeModal("agentModalBackdrop", "agentModal"); });
+    $("agentModalBackdrop").addEventListener("click", function() { closeModal("agentModalBackdrop", "agentModal"); });
+    $("agentCancelBtn").addEventListener("click", function() { closeModal("agentModalBackdrop", "agentModal"); });
+    $("agentStartBtn").addEventListener("click", function() {
+      var task = $("agentTaskInput").value.trim();
+      if (!task) return;
+      var model = $("agentModelInput").value.trim() || null;
+      callBackend("spawn_agent", { task: task, model: model }).then(function(result) {
+        var agentId = typeof result === "string" ? result : (result && result.id ? result.id : "unknown");
+        appendMessage("titan", "Agent gestartet (ID: " + agentId + ")\nAufgabe: " + task, Date.now(), true);
+        callBackend("log_activity", { type: "agent_started", message: task.substring(0, 80) }).catch(function() {});
+        closeModal("agentModalBackdrop", "agentModal");
+        $("agentTaskInput").value = "";
+        $("agentModelInput").value = "";
+        updateAgentStatus();
+      }).catch(function(err) {
+        alert("Agent-Fehler: " + err);
+      });
+    });
+  }
+
+  // --- CONFIRM DIALOG ---
+  function setupConfirmDialog() {
+    $("confirmNoBtn").addEventListener("click", function() { closeModal("confirmBackdrop", "confirmModal"); });
+    $("confirmBackdrop").addEventListener("click", function() { closeModal("confirmBackdrop", "confirmModal"); });
+    $("confirmYesBtn").addEventListener("click", function() {
+      if (confirmCallback) confirmCallback();
+    });
+  }
+
+  // ============ SETTINGS ============
   function initSettings() {
     $("apiUrlInput").value = settings.apiUrl;
     $("apiKeyInput").value = settings.apiKey;
@@ -1263,14 +2274,18 @@
     $("systemPromptInput").value = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
     $("systemAccessToggle").checked = settings.systemAccess;
     $("skillsToggle").checked = settings.skillsEnabled;
+    $("bypassPermissionsToggle").checked = settings.bypassPermissions;
+    $("autoScreenshotToggle").checked = settings.autoScreenshot;
+    $("continuousModeToggle").checked = settings.continuousMode;
     $("themeToggle").checked = settings.theme === "light";
     $("serverUrlDisplay").textContent = settings.apiUrl.replace("http://", "").replace("https://", "");
+    // Bypass Warning anzeigen falls aktiv
+    $("bypassWarning").style.display = settings.bypassPermissions ? "block" : "none";
   }
 
   function saveSettings() {
     setSetting(STORAGE_KEYS.apiUrl, $("apiUrlInput").value || defaults.apiUrl);
     setSetting(STORAGE_KEYS.apiKey, $("apiKeyInput").value);
-    // modelDisplay statt modelSelect
     var modelVal = $("modelDisplay").value.trim() || settings.model;
     setSetting(STORAGE_KEYS.model, modelVal);
     setSetting(STORAGE_KEYS.fallbackModels, $("fallbackModelsInput").value);
@@ -1279,6 +2294,9 @@
     setSetting(STORAGE_KEYS.systemPrompt, $("systemPromptInput").value);
     setSetting(STORAGE_KEYS.systemAccess, $("systemAccessToggle").checked ? "true" : "false");
     setSetting(STORAGE_KEYS.skillsEnabled, $("skillsToggle").checked ? "true" : "false");
+    setSetting(STORAGE_KEYS.bypassPermissions, $("bypassPermissionsToggle").checked ? "true" : "false");
+    setSetting(STORAGE_KEYS.autoScreenshot, $("autoScreenshotToggle").checked ? "true" : "false");
+    setSetting(STORAGE_KEYS.continuousMode, $("continuousModeToggle").checked ? "true" : "false");
     var theme = $("themeToggle").checked ? "light" : "dark";
     setSetting(STORAGE_KEYS.theme, theme);
 
@@ -1291,11 +2309,22 @@
     settings.systemPrompt = getSetting(STORAGE_KEYS.systemPrompt, "");
     settings.systemAccess = getSettingBool(STORAGE_KEYS.systemAccess, defaults.systemAccess);
     settings.skillsEnabled = getSettingBool(STORAGE_KEYS.skillsEnabled, defaults.skillsEnabled);
+    settings.bypassPermissions = getSettingBool(STORAGE_KEYS.bypassPermissions, defaults.bypassPermissions);
+    settings.autoScreenshot = getSettingBool(STORAGE_KEYS.autoScreenshot, defaults.autoScreenshot);
+    settings.continuousMode = getSettingBool(STORAGE_KEYS.continuousMode, defaults.continuousMode);
     settings.theme = getSetting(STORAGE_KEYS.theme, defaults.theme);
 
     $("serverUrlDisplay").textContent = settings.apiUrl.replace("http://", "").replace("https://", "");
     applyTheme();
     startStatusTimer();
+
+    // Bypass Warning
+    $("bypassWarning").style.display = settings.bypassPermissions ? "block" : "none";
+
+    // Settings ans Backend senden
+    callBackend("set_setting", { key: "bypass_permissions", value: settings.bypassPermissions ? "true" : "false" }).catch(function() {});
+    callBackend("set_setting", { key: "auto_screenshot", value: settings.autoScreenshot ? "true" : "false" }).catch(function() {});
+    callBackend("set_setting", { key: "continuous_mode", value: settings.continuousMode ? "true" : "false" }).catch(function() {});
   }
 
   function applyTheme() {
@@ -1307,9 +2336,6 @@
   }
 
   function setupSettingsEvents() {
-    $("skillsSearch").addEventListener("input", function() {
-      loadSkillsForSearch(this.value);
-    });
     $("apiUrlInput").addEventListener("change", saveSettings);
     $("apiKeyInput").addEventListener("change", saveSettings);
     $("fallbackModelsInput").addEventListener("change", saveSettings);
@@ -1318,32 +2344,23 @@
     $("systemPromptInput").addEventListener("change", saveSettings);
     $("systemAccessToggle").addEventListener("change", saveSettings);
     $("skillsToggle").addEventListener("change", saveSettings);
+    $("bypassPermissionsToggle").addEventListener("change", saveSettings);
+    $("autoScreenshotToggle").addEventListener("change", saveSettings);
+    $("continuousModeToggle").addEventListener("change", saveSettings);
     $("themeToggle").addEventListener("change", saveSettings);
 
-    // Modell-Auswahl Modal in Settings
     $("settingsModelChooseBtn").addEventListener("click", function() {
-      var url = $("apiUrlInput").value.trim();
-      var key = $("apiKeyInput").value.trim();
-      callBackend("ollama_list_models", { apiUrl: url, apiKey: key }).then(function(models) {
-        if (models && models.length > 0) {
-          openModelModal("settings", models);
-        } else {
-          $("settingsModelStatus").textContent = "Keine Modelle gefunden.";
-          $("settingsModelStatus").className = "hint";
-        }
+      callBackend("ollama_list_models", { apiUrl: $("apiUrlInput").value.trim(), apiKey: $("apiKeyInput").value.trim() }).then(function(models) {
+        if (models && models.length > 0) openModelModal("settings", models);
+        else { $("settingsModelStatus").textContent = "Keine Modelle gefunden."; $("settingsModelStatus").className = "hint"; }
       }).catch(function() {
         $("settingsModelStatus").textContent = "Modelle konnten nicht geladen werden.";
         $("settingsModelStatus").className = "hint";
       });
     });
-    $("modelDisplay").addEventListener("click", function() {
-      $("settingsModelChooseBtn").click();
-    });
+    $("modelDisplay").addEventListener("click", function() { $("settingsModelChooseBtn").click(); });
 
-    // Ollama Connect in Settings
-    $("openOllamaLoginBtn").addEventListener("click", function() {
-      openOllamaConnectModal("settings");
-    });
+    $("openOllamaLoginBtn").addEventListener("click", function() { openOllamaConnectModal("settings"); });
 
     $("testConnBtn").addEventListener("click", function() {
       $("testConnStatus").textContent = "Teste...";
@@ -1369,22 +2386,38 @@
 
     $("exportDataBtn").addEventListener("click", exportData);
     $("deleteDataBtn").addEventListener("click", deleteData);
-  }
 
-  function loadSkillsForSearch(filter) {
-    callBackend("skills_list", {}).then(function(result) {
-      try {
-        var skills = JSON.parse(result);
-        renderSkills(skills, filter);
-      } catch (e) {}
-    }).catch(function() {});
+    // Update-Check Button
+    $("checkUpdatesBtn").addEventListener("click", function() {
+      $("checkUpdatesBtn").disabled = true;
+      $("checkUpdatesBtn").textContent = "Pruefe...";
+      callBackend("check_for_updates", {}).then(function(result) {
+        $("checkUpdatesBtn").disabled = false;
+        $("checkUpdatesBtn").textContent = "Nach Updates suchen";
+        var info = typeof result === "string" ? JSON.parse(result) : result;
+        if (info && info.current_version) {
+          $("currentVersionDisplay").textContent = "Titan Toti v" + info.current_version;
+        }
+        if (info && info.update_available) {
+          $("updateCheckStatus").textContent = "Neue Version " + info.latest_version + " verfuegbar!";
+          $("updateCheckStatus").style.color = "var(--green)";
+        } else {
+          $("updateCheckStatus").textContent = "Du nutzt die neueste Version.";
+          $("updateCheckStatus").style.color = "var(--text-secondary)";
+        }
+      }).catch(function() {
+        $("checkUpdatesBtn").disabled = false;
+        $("checkUpdatesBtn").textContent = "Nach Updates suchen";
+        $("updateCheckStatus").textContent = "Update-Check fehlgeschlagen.";
+      });
+    });
   }
 
   function exportData() {
     callBackend("memory_get_sessions", {}).then(function(sessionsResult) {
       var exportObj = {
         app: "Titan Toti",
-        version: "2.2.0",
+        version: "2.3.0",
         export_date: new Date().toISOString(),
         settings: {
           apiUrl: settings.apiUrl,
@@ -1394,7 +2427,6 @@
         },
         sessions: JSON.parse(sessionsResult)
       };
-      // Alle Nachrichten laden
       var sessions = exportObj.sessions;
       var promises = sessions.map(function(s) {
         return callBackend("memory_get_messages", { sessionId: s.id }).then(function(msgs) {
@@ -1419,19 +2451,21 @@
   }
 
   function deleteData() {
-    if (!confirm("Moechtest du wirklich alle Daten loeschen? Dies kann nicht rueckgaengig gemacht werden.")) return;
-    callBackend("memory_clear_all", {}).then(function() {
-      // localStorage auch leeren
-      localStorage.removeItem(STORAGE_KEYS.currentSession);
-      localStorage.removeItem(STORAGE_KEYS.setupDone);
-      chatHistory = {};
-      renderChatMessages();
-      $("dsvoStatus").textContent = "Alle Daten geloescht!";
-      $("dsvoStatus").className = "hint success";
-      updateSessionSelect();
-    }).catch(function(err) {
-      $("dsvoStatus").textContent = "Fehler: " + err;
-      $("dsvoStatus").className = "hint error";
+    showConfirm("Alle Daten loeschen", "Moechtest du wirklich alle Daten loeschen? Dies kann nicht rueckgaengig gemacht werden.", function() {
+      callBackend("memory_clear_all", {}).then(function() {
+        localStorage.removeItem(STORAGE_KEYS.currentSession);
+        localStorage.removeItem(STORAGE_KEYS.setupDone);
+        chatHistory = {};
+        renderChatMessages();
+        $("dsvoStatus").textContent = "Alle Daten geloescht!";
+        $("dsvoStatus").className = "hint success";
+        updateSessionSelect();
+        closeModal("confirmBackdrop", "confirmModal");
+      }).catch(function(err) {
+        $("dsvoStatus").textContent = "Fehler: " + err;
+        $("dsvoStatus").className = "hint error";
+        closeModal("confirmBackdrop", "confirmModal");
+      });
     });
   }
 

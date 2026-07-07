@@ -1,10 +1,15 @@
-// Titan Toti v2.2 — Standalone Backend (Rust)
-// Direkte Ollama API Anbindung + Local Skills + Memory + System Access
+// Titan Toti v2.3 — Standalone Backend (Rust) — MAJOR Overhaul
+// Features: Activity Feed, Agent Spawning, System Access, Bypass Permissions,
+//           Native Vision, Continuous Mode, 3-Zone Memory, Password Manager, Skill Hub
 // KEINE Backticks in diesem File
 
+mod activity;
+mod agents;
 mod memory;
+mod settings;
 mod skills;
 mod update;
+mod vision;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -13,6 +18,10 @@ use tauri_plugin_opener::OpenerExt;
 const APP_VERSION: &str = "2.3.0";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
+
+// ============================================================================
+// CHAT STRUCTS
+// ============================================================================
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessage {
@@ -66,6 +75,23 @@ struct SystemCommandResult {
     exit_code: i32,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct CommandResult {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    duration_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct DirEntry {
+    name: String,
+    path: String,
+    kind: String,
+    size: u64,
+    modified: String,
+}
+
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -73,7 +99,540 @@ fn http_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-/// Direkter Chat-Call an Ollama (OpenAI-compatible /v1/chat/completions)
+fn http_client_short() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Hilfsfunktion: Activity loggen
+fn log_act(atype: &str, msg: &str) {
+    activity::log(atype, msg, None);
+}
+
+// ============================================================================
+// FEATURE 1: ACTIVITY FEED
+// ============================================================================
+
+#[tauri::command]
+async fn log_activity(activity_type: String, message: String, timestamp: String) -> Result<bool, String> {
+    activity::log_activity_cmd(activity_type, message, timestamp)
+}
+
+#[tauri::command]
+async fn get_activities(limit: u32) -> Result<String, String> {
+    activity::get_activities_cmd(limit)
+}
+
+#[tauri::command]
+async fn clear_activities() -> Result<bool, String> {
+    activity::clear_activities_cmd()
+}
+
+// ============================================================================
+// FEATURE 2: AGENT SPAWNING
+// ============================================================================
+
+#[tauri::command]
+async fn spawn_agent(task: String, context: String) -> Result<String, String> {
+    agents::spawn_agent_cmd(task, context)
+}
+
+#[tauri::command]
+async fn get_agent_status(agent_id: String) -> Result<String, String> {
+    agents::get_agent_status_cmd(agent_id)
+}
+
+#[tauri::command]
+async fn list_agents() -> Result<String, String> {
+    agents::list_agents_cmd()
+}
+
+#[tauri::command]
+async fn stop_agent(agent_id: String) -> Result<bool, String> {
+    agents::stop_agent_cmd(agent_id)
+}
+
+#[tauri::command]
+async fn pause_agent(agent_id: String) -> Result<bool, String> {
+    agents::pause_agent_cmd(agent_id)
+}
+
+#[tauri::command]
+async fn resume_agent(agent_id: String) -> Result<bool, String> {
+    agents::resume_agent_cmd(agent_id)
+}
+
+// ============================================================================
+// FEATURE 3: SYSTEM-ZUGRIFF (erweitert)
+// ============================================================================
+
+#[tauri::command]
+async fn read_file(path: String) -> Result<String, String> {
+    log_act("file_read", &format!("Datei gelesen: {}", path));
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("Datei nicht lesbar: {}", e))
+}
+
+#[tauri::command]
+async fn write_file(path: String, content: String) -> Result<String, String> {
+    // Bypass-Permission-Check
+    if !settings::bypass_permissions() {
+        return Ok(serde_json::json!({
+            "requires_approval": true,
+            "action": "write_file",
+            "path": path,
+            "content_length": content.len()
+        }).to_string());
+    }
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Verzeichnis nicht erstellbar: {}", e))?;
+    }
+    tokio::fs::write(&path, &content)
+        .await
+        .map(|_| {
+            log_act("file_write", &format!("Datei geschrieben: {}", path));
+            serde_json::json!({"success": true, "path": path}).to_string()
+        })
+        .map_err(|e| format!("Datei nicht schreibbar: {}", e))
+}
+
+#[tauri::command]
+async fn list_dir(path: String) -> Result<String, String> {
+    log_act("action", &format!("Verzeichnis aufgelistet: {}", path));
+    let mut entries = tokio::fs::read_dir(&path)
+        .await
+        .map_err(|e| format!("Verzeichnis nicht lesbar: {}", e))?;
+
+    let mut result = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(|e| format!("{}", e))? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = entry.path().to_string_lossy().to_string();
+        let meta = entry.metadata().await.ok();
+        let kind = if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) { "dir" } else { "file" };
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified = meta.as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default();
+        result.push(DirEntry { name, path: entry_path, kind: kind.to_string(), size, modified });
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    serde_json::to_string(&result).map_err(|e| format!("Serialize-Fehler: {}", e))
+}
+
+#[tauri::command]
+async fn execute_command(command: String, args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
+    // Bypass-Permission-Check
+    if !settings::bypass_permissions() {
+        let cmd_display = format!("{} {}", command, args.join(" "));
+        return Ok(serde_json::json!({
+            "requires_approval": true,
+            "command": cmd_display,
+            "action": "execute_command"
+        }).to_string());
+    }
+
+    log_act("command", &format!("Ausgefuehrt: {} {}", command, args.join(" ")));
+
+    let start = std::time::Instant::now();
+    let mut cmd = tokio::process::Command::new(&command);
+    cmd.args(&args);
+    if let Some(d) = cwd {
+        cmd.current_dir(d);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    // 30s Timeout
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        cmd.output()
+    ).await;
+
+    let elapsed = start.elapsed().as_millis() as u64;
+
+    match output {
+        Ok(Ok(out)) => {
+            let result = CommandResult {
+                stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+                exit_code: out.status.code().unwrap_or(-1),
+                duration_ms: elapsed,
+            };
+            serde_json::to_string(&result).map_err(|e| format!("Serialize-Fehler: {}", e))
+        }
+        Ok(Err(e)) => Err(format!("Command-Fehler: {}", e)),
+        Err(_) => Err("Command-Timeout (30s)".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn execute_command_async(command: String, args: Vec<String>) -> Result<String, String> {
+    log_act("command", &format!("Async gestartet: {} {}", command, args.join(" ")));
+
+    let pid = tokio::process::Command::new(&command)
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Command-Fehler: {}", e))?
+        .id();
+
+    Ok(serde_json::json!({
+        "pid": pid,
+        "status": "started"
+    }).to_string())
+}
+
+#[tauri::command]
+async fn get_system_info() -> Result<String, String> {
+    log_act("action", "System-Info abgerufen");
+
+    // OS Version
+    let os_version = tokio::process::Command::new("sw_vers")
+        .output().await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    // Hostname
+    let hostname = tokio::process::Command::new("hostname")
+        .output().await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    // Hardware info
+    let hw_info = tokio::process::Command::new("system_profiler")
+        .args(&["SPHardwareDataType"])
+        .output().await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    // Disk info
+    let disk_info = tokio::process::Command::new("df")
+        .args(&["-h", "/"])
+        .output().await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    // Memory
+    let mem_info = tokio::process::Command::new("vm_stat")
+        .output().await
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "os_version": os_version.trim(),
+        "hostname": hostname,
+        "hardware": hw_info.trim(),
+        "disk": disk_info.trim(),
+        "memory": mem_info.trim()
+    }).to_string())
+}
+
+#[tauri::command]
+async fn screenshot() -> Result<String, String> {
+    log_act("action", "Screenshot erstellt");
+    let path = "/tmp/titan_screenshot.png";
+    let output = tokio::process::Command::new("screencapture")
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| format!("Screenshot-Fehler: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Screenshot konnte nicht erstellt werden".to_string());
+    }
+
+    // Base64 encode
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Screenshot nicht lesbar: {}", e))?;
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(serde_json::json!({"image": b64, "path": path}).to_string())
+}
+
+#[tauri::command]
+async fn open_app(app_name: String) -> Result<bool, String> {
+    log_act("action", &format!("App geoeffnet: {}", app_name));
+    tokio::process::Command::new("open")
+        .args(&["-a", &app_name])
+        .spawn()
+        .map(|_| true)
+        .map_err(|e| format!("Konnte App nicht oeffnen: {}", e))
+}
+
+#[tauri::command]
+async fn open_url(url: String) -> Result<bool, String> {
+    log_act("action", &format!("URL geoeffnet: {}", url));
+    tokio::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map(|_| true)
+        .map_err(|e| format!("Konnte URL nicht oeffnen: {}", e))
+}
+
+#[tauri::command]
+async fn clipboard_read() -> Result<String, String> {
+    log_act("action", "Zwischenablage gelesen");
+    let output = tokio::process::Command::new("pbpaste")
+        .output()
+        .await
+        .map_err(|e| format!("pbpaste-Fehler: {}", e))?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn clipboard_write(text: String) -> Result<bool, String> {
+    log_act("action", "Zwischenablage geschrieben");
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("pbcopy-Fehler: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes()).await.map_err(|e| format!("Write-Fehler: {}", e))?;
+    }
+    child.wait().await.map(|_| true).map_err(|e| format!("Wait-Fehler: {}", e))
+}
+
+// ============================================================================
+// FEATURE 4: SETTINGS / BYPASS PERMISSIONS
+// ============================================================================
+
+#[tauri::command]
+async fn get_settings() -> Result<String, String> {
+    settings::get_settings_cmd()
+}
+
+#[tauri::command]
+async fn set_setting(key: String, value: String) -> Result<bool, String> {
+    settings::set_setting_cmd(key, value)
+}
+
+// ============================================================================
+// FEATURE 5: NATIVE VISION
+// ============================================================================
+
+#[tauri::command]
+async fn analyze_image(image_path: String, question: String) -> Result<String, String> {
+    let s = settings::get_settings();
+    log_act("action", &format!("Bild analysiert: {}", image_path));
+    vision::analyze_image(image_path, question, s.api_url, s.api_key, s.model).await
+}
+
+#[tauri::command]
+async fn analyze_screenshot(question: String) -> Result<String, String> {
+    let s = settings::get_settings();
+    log_act("action", "Screenshot analysiert");
+    vision::analyze_screenshot(question, s.api_url, s.api_key, s.model).await
+}
+
+#[tauri::command]
+async fn list_vision_models(api_url: String, api_key: String) -> Result<String, String> {
+    vision::list_vision_models(api_url, api_key).await
+}
+
+// ============================================================================
+// FEATURE 6: CONTINUOUS MODE
+// ============================================================================
+
+#[tauri::command]
+async fn start_continuous_task(goal: String) -> Result<String, String> {
+    agents::start_continuous_task_cmd(goal)
+}
+
+#[tauri::command]
+async fn pause_continuous_task(task_id: String) -> Result<bool, String> {
+    agents::pause_continuous_task_cmd(task_id)
+}
+
+#[tauri::command]
+async fn resume_continuous_task(task_id: String) -> Result<bool, String> {
+    agents::resume_continuous_task_cmd(task_id)
+}
+
+#[tauri::command]
+async fn stop_continuous_task(task_id: String) -> Result<bool, String> {
+    agents::stop_continuous_task_cmd(task_id)
+}
+
+#[tauri::command]
+async fn get_continuous_tasks() -> Result<String, String> {
+    agents::get_continuous_tasks_cmd()
+}
+
+// ============================================================================
+// FEATURE 7: 3-ZONE MEMORY SYSTEM
+// ============================================================================
+
+#[tauri::command]
+async fn memory_add_core(key: String, value: String, tags: Vec<String>, entry_type: String) -> Result<bool, String> {
+    let ok = memory::add_core(&key, &value, tags, &entry_type)?;
+    log_act("memory_saved", &format!("Core-Eintrag hinzugefuegt: {}", key));
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn memory_search_core(query: String) -> Result<String, String> {
+    memory::search_core(&query)
+}
+
+#[tauri::command]
+async fn memory_edit_core(entry_id: String, key: Option<String>, value: Option<String>) -> Result<bool, String> {
+    memory::edit_core(&entry_id, key.as_deref(), value.as_deref())
+}
+
+#[tauri::command]
+async fn memory_delete_core(entry_id: String) -> Result<bool, String> {
+    memory::delete_core(&entry_id)
+}
+
+#[tauri::command]
+async fn memory_add_skill(name: String, description: String, category: String, steps: Vec<String>) -> Result<bool, String> {
+    let ok = memory::add_skill(&name, &description, &category, steps)?;
+    log_act("memory_saved", &format!("Skill-Eintrag hinzugefuegt: {}", name));
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn memory_search_skills(query: String) -> Result<String, String> {
+    memory::search_skills(&query)
+}
+
+#[tauri::command]
+async fn memory_delete_skill(entry_id: String) -> Result<bool, String> {
+    memory::delete_skill(&entry_id)
+}
+
+#[tauri::command]
+async fn memory_add_sensitive(
+    entry_type: String,
+    title: String,
+    username: String,
+    value: String,
+    url: String,
+    email: String,
+    group: String,
+    tags: Vec<String>,
+) -> Result<bool, String> {
+    let ok = memory::add_sensitive(&entry_type, &title, &username, &value, &url, &email, &group, tags)?;
+    log_act("memory_saved", &format!("Sensitive-Eintrag hinzugefuegt: {}", title));
+    Ok(ok)
+}
+
+#[tauri::command]
+async fn memory_search_sensitive(query: String) -> Result<String, String> {
+    memory::search_sensitive(&query)
+}
+
+#[tauri::command]
+async fn memory_edit_sensitive(entry_id: String, fields: String) -> Result<bool, String> {
+    let parsed: serde_json::Value = serde_json::from_str(&fields).map_err(|e| format!("JSON-Fehler: {}", e))?;
+    memory::edit_sensitive(&entry_id, parsed)
+}
+
+#[tauri::command]
+async fn memory_delete_sensitive(entry_id: String) -> Result<bool, String> {
+    memory::delete_sensitive(&entry_id)
+}
+
+#[tauri::command]
+async fn memory_get_sensitive_value(entry_id: String) -> Result<String, String> {
+    memory::get_sensitive_value(&entry_id)
+}
+
+#[tauri::command]
+async fn memory_get_zone(zone: String) -> Result<String, String> {
+    memory::get_zone(&zone)
+}
+
+#[tauri::command]
+async fn memory_get_all() -> Result<String, String> {
+    memory::get_all()
+}
+
+#[tauri::command]
+async fn memory_clear_zone(zone: String) -> Result<bool, String> {
+    memory::clear_zone(&zone)
+}
+
+// ============================================================================
+// FEATURE 8: PASSWORD MANAGER
+// ============================================================================
+
+#[tauri::command]
+async fn password_manager_list(group: Option<String>) -> Result<String, String> {
+    memory::password_manager_list(group.as_deref())
+}
+
+#[tauri::command]
+async fn password_manager_search(query: String) -> Result<String, String> {
+    memory::password_manager_search(&query)
+}
+
+#[tauri::command]
+async fn password_manager_add(entry: String) -> Result<bool, String> {
+    let parsed: serde_json::Value = serde_json::from_str(&entry).map_err(|e| format!("JSON-Fehler: {}", e))?;
+    memory::password_manager_add(parsed)
+}
+
+#[tauri::command]
+async fn password_manager_edit(entry_id: String, fields: String) -> Result<bool, String> {
+    let parsed: serde_json::Value = serde_json::from_str(&fields).map_err(|e| format!("JSON-Fehler: {}", e))?;
+    memory::password_manager_edit(&entry_id, parsed)
+}
+
+#[tauri::command]
+async fn password_manager_delete(entry_id: String) -> Result<bool, String> {
+    memory::password_manager_delete(&entry_id)
+}
+
+#[tauri::command]
+async fn password_manager_link(entry_id: String, linked_id: String) -> Result<bool, String> {
+    memory::password_manager_link(&entry_id, &linked_id)
+}
+
+#[tauri::command]
+async fn password_manager_export() -> Result<String, String> {
+    memory::password_manager_export()
+}
+
+#[tauri::command]
+async fn password_manager_import(json: String) -> Result<bool, String> {
+    memory::password_manager_import(&json)
+}
+
+// ============================================================================
+// FEATURE 9: SKILL HUB
+// ============================================================================
+
+#[tauri::command]
+async fn list_skills() -> Result<String, String> {
+    skills::list_skills_json()
+}
+
+#[tauri::command]
+async fn get_skill_details(skill_name: String) -> Result<String, String> {
+    skills::get_skill_details_json(&skill_name)
+}
+
+#[tauri::command]
+async fn execute_skill(skill_name: String, args: Vec<String>) -> Result<String, String> {
+    log_act("skill", &format!("Skill ausgefuehrt: {}", skill_name));
+    skills::execute_skill(&skill_name, &args, true).await
+}
+
+// ============================================================================
+// CHAT (Ollama API)
+// ============================================================================
+
 #[tauri::command]
 async fn ollama_chat(
     api_url: String,
@@ -84,6 +643,7 @@ async fn ollama_chat(
     max_tokens: Option<u64>,
     fallback_models: Vec<String>,
 ) -> Result<String, String> {
+    log_act("thinking", "Chat-Anfrage gesendet");
     let url = format!("{}/v1/chat/completions", api_url.trim_end_matches('/'));
     let client = http_client();
 
@@ -118,12 +678,12 @@ async fn ollama_chat(
                     match serde_json::from_str::<OllamaChatResponse>(&text) {
                         Ok(parsed) => {
                             if let Some(choice) = parsed.choices.first() {
+                                log_act("thinking", "Chat-Antwort erhalten");
                                 return Ok(choice.message.content.clone());
                             }
                             last_error = "Keine choices in Response".to_string();
                         }
                         Err(e) => {
-                            // Native Ollama response fallback
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                                 if let Some(content) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
                                     return Ok(content.to_string());
@@ -132,11 +692,11 @@ async fn ollama_chat(
                                     return Ok(content.to_string());
                                 }
                             }
-                            last_error = format!("Parse-Fehler: {} — {}", e, &text[..text.len().min(200)]);
+                            last_error = format!("Parse-Fehler: {} - {}", e, &text[..text.len().min(200)]);
                         }
                     }
                 } else {
-                    last_error = format!("HTTP {} — {}", status.as_u16(), &text[..text.len().min(200)]);
+                    last_error = format!("HTTP {} - {}", status.as_u16(), &text[..text.len().min(200)]);
                 }
             }
             Err(e) => {
@@ -145,16 +705,15 @@ async fn ollama_chat(
         }
     }
 
+    log_act("error", &format!("Chat fehlgeschlagen: {}", last_error));
     Err(format!("Alle Modelle fehlgeschlagen. Letzter Fehler: {}", last_error))
 }
 
-/// Liste verfuegbarer Modelle von Ollama
 #[tauri::command]
 async fn ollama_list_models(api_url: String, api_key: String) -> Result<Vec<String>, String> {
     let base = api_url.trim_end_matches('/');
     let client = http_client();
 
-    // Versuch 1: OpenAI-compatible /v1/models
     let url1 = format!("{}/v1/models", base);
     let mut req = client.get(&url1);
     if !api_key.is_empty() {
@@ -182,7 +741,6 @@ async fn ollama_list_models(api_url: String, api_key: String) -> Result<Vec<Stri
         }
     }
 
-    // Versuch 2: Ollama native /api/tags
     let url2 = format!("{}/api/tags", base);
     if let Ok(resp) = client.get(&url2).send().await {
         if resp.status().is_success() {
@@ -202,27 +760,23 @@ async fn ollama_list_models(api_url: String, api_key: String) -> Result<Vec<Stri
     Err("Konnte Modelle nicht abrufen".to_string())
 }
 
-/// Health-Check fuer Ollama
 #[tauri::command]
 async fn ollama_health(api_url: String) -> Result<bool, String> {
     let base = api_url.trim_end_matches('/');
-    let client = http_client();
+    let client = http_client_short();
 
-    // Versuch /api/version
     let url1 = format!("{}/api/version", base);
     if let Ok(resp) = client.get(&url1).send().await {
         if resp.status().is_success() {
             return Ok(true);
         }
     }
-    // Versuch /health
     let url2 = format!("{}/health", base);
     if let Ok(resp) = client.get(&url2).send().await {
         if resp.status().is_success() {
             return Ok(true);
         }
     }
-    // Versuch /v1/models
     let url3 = format!("{}/v1/models", base);
     if let Ok(resp) = client.get(&url3).send().await {
         if resp.status().is_success() {
@@ -232,9 +786,10 @@ async fn ollama_health(api_url: String) -> Result<bool, String> {
     Ok(false)
 }
 
-/// System-Command ausfuehren
+/// System-Command ausfuehren (Legacy, ohne Permission-Check)
 #[tauri::command]
 async fn system_command(command: String, args: Vec<String>) -> Result<String, String> {
+    log_act("command", &format!("System-Command: {} {}", command, args.join(" ")));
     let output = tokio::process::Command::new(&command)
         .args(&args)
         .output()
@@ -253,119 +808,28 @@ async fn system_command(command: String, args: Vec<String>) -> Result<String, St
     serde_json::to_string(&result).map_err(|e| format!("Serialize-Fehler: {}", e))
 }
 
-/// Lokale Datei lesen
-#[tauri::command]
-async fn read_file(path: String) -> Result<String, String> {
-    tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| format!("Datei nicht lesbar: {}", e))
-}
-
-/// Lokale Datei schreiben
-#[tauri::command]
-async fn write_file(path: String, content: String) -> Result<bool, String> {
-    if let Some(parent) = std::path::Path::new(&path).parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Verzeichnis nicht erstellbar: {}", e))?;
-    }
-    tokio::fs::write(&path, content)
-        .await
-        .map(|_| true)
-        .map_err(|e| format!("Datei nicht schreibbar: {}", e))
-}
-
-/// Verzeichnis auflisten
-#[tauri::command]
-async fn list_dir(path: String) -> Result<Vec<String>, String> {
-    let mut entries = tokio::fs::read_dir(&path)
-        .await
-        .map_err(|e| format!("Verzeichnis nicht lesbar: {}", e))?;
-
-    let mut result = Vec::new();
-    while let Some(entry) = entries.next_entry().await.map_err(|e| format!("{}", e))? {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let meta = entry.metadata().await.ok();
-        let kind = if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) { "dir" } else { "file" };
-        result.push(format!("[{}] {}", kind, name));
-    }
-    result.sort();
-    Ok(result)
-}
-
-/// Memory: Session erstellen
-#[tauri::command]
-async fn memory_create_session(name: String) -> Result<String, String> {
-    memory::create_session(&name)
-}
-
-/// Memory: Nachricht an Session anhaengen
-#[tauri::command]
-async fn memory_add_message(session_id: String, role: String, content: String) -> Result<bool, String> {
-    memory::add_message(&session_id, &role, &content)
-}
-
-/// Memory: Alle Sessions abrufen
-#[tauri::command]
-async fn memory_get_sessions() -> Result<String, String> {
-    memory::get_sessions_json()
-}
-
-/// Memory: Nachrichten einer Session abrufen
-#[tauri::command]
-async fn memory_get_messages(session_id: String) -> Result<String, String> {
-    memory::get_messages_json(&session_id)
-}
-
-/// Memory: Session loeschen
-#[tauri::command]
-async fn memory_delete_session(session_id: String) -> Result<bool, String> {
-    memory::delete_session(&session_id)
-}
-
-/// Memory: Suchen
-#[tauri::command]
-async fn memory_search(query: String) -> Result<String, String> {
-    memory::search(&query)
-}
-
-/// Memory: Alles loeschen (DSGVO)
-#[tauri::command]
-async fn memory_clear_all() -> Result<bool, String> {
-    memory::clear_all()
-}
-
-/// Skills: Liste abrufen
-#[tauri::command]
-async fn skills_list() -> Result<String, String> {
-    skills::list_skills_json()
-}
-
-/// Skills: Match gegen User-Nachricht
+/// Skills: Match gegen User-Nachricht (Legacy)
 #[tauri::command]
 async fn skills_match(message: String, system_access: bool) -> Result<String, String> {
     skills::match_and_execute(&message, system_access).await
 }
 
-/// Skills: Bestimmten Skill ausfuehren
+/// Skills: Bestimmten Skill ausfuehren (Legacy)
 #[tauri::command]
 async fn skills_execute(skill_name: String, args: Vec<String>, system_access: bool) -> Result<String, String> {
     skills::execute_skill(&skill_name, &args, system_access).await
 }
 
-/// Gibt App-Version zurueck
 #[tauri::command]
 fn app_version() -> String {
     APP_VERSION.to_string()
 }
 
-/// Gibt Default-System-Prompt zurueck
 #[tauri::command]
 fn default_system_prompt() -> String {
     DEFAULT_SYSTEM_PROMPT.to_string()
 }
 
-/// Memory-Pfad zurueckgeben
 #[tauri::command]
 fn memory_path() -> String {
     memory::memory_file_path().to_string_lossy().to_string()
@@ -374,23 +838,10 @@ fn memory_path() -> String {
 // ============================================================================
 // OLLAMA DEVICE AUTH FLOW (v2.3)
 // ============================================================================
-// Ollama nutzt einen ed25519-Key-Pair-Auth-Flow:
-//   1. Client hat ~/.ollama/id_ed25519 (privat) + id_ed25519.pub (public)
-//   2. Connect-URL: https://ollama.com/connect?name=<PUBKEY>
-//   3. User oeffnet URL im Browser -> "Connect" Button -> klickt -> autorisiert
-//   4. Ollama CLI "ollama signin" pollt im Hintergrund bis autorisiert
-//   5. Danach kann man Cloud-Modelle pullen (z.B. glm-5.2:cloud)
-// Die lokale Ollama API auf Port 11434 hat KEINEN Auth-Endpoint.
-// Der Flow laeuft ueber die ollama CLI + ollama.com.
-// ============================================================================
 
-// Globaler State fuer den Auth-Flow
 static AUTH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static AUTH_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Findet den ollama Binary-Pfad auf dem System.
-/// Prueft: PATH, /Applications/Ollama.app/Contents/Resources/ollama,
-/// /usr/local/bin/ollama, /opt/homebrew/bin/ollama
 fn find_ollama_binary() -> Option<String> {
     let candidates = vec![
         "ollama",
@@ -407,14 +858,10 @@ fn find_ollama_binary() -> Option<String> {
     None
 }
 
-/// Liest den ollama ed25519 public key aus ~/.ollama/id_ed25519.pub
-/// Format: ssh-ed25519 AAAA... [comment]
 fn read_ollama_pubkey() -> Option<String> {
     let home = dirs::home_dir()?;
     let pub_path = home.join(".ollama").join("id_ed25519.pub");
     let content = std::fs::read_to_string(&pub_path).ok()?;
-    // Format: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... [comment]"
-    // Wir wollen nur den Key-Teil (das zweite Token)
     let parts: Vec<&str> = content.trim().split_whitespace().collect();
     if parts.len() >= 2 {
         Some(parts[1].to_string())
@@ -423,45 +870,26 @@ fn read_ollama_pubkey() -> Option<String> {
     }
 }
 
-/// Startet den Ollama Device-Auth-Flow.
-/// 1. Oeffnet https://ollama.com/connect?name=<PUBKEY> im Browser (non-blocking)
-/// 2. Startet "ollama signin" im Hintergrund (pollt bis autorisiert)
-/// 3. Returned sofort ein JSON mit Status
-/// Der Frontend pollt check_auth_status() alle 2 Sekunden.
 #[tauri::command]
 async fn start_ollama_auth(app: tauri::AppHandle) -> Result<String, String> {
-    // Reset state
     AUTH_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
     AUTH_DONE.store(false, std::sync::atomic::Ordering::SeqCst);
 
-    // Schritt 1: Pruefen ob Ollama binary verfuegbar ist
     let ollama_bin = find_ollama_binary();
-
-    // Schritt 2: Public Key lesen
     let pubkey = read_ollama_pubkey();
 
-    // Schritt 3: Connect-URL bauen und Browser oeffnen
     let connect_url = match &pubkey {
         Some(pk) => format!("https://ollama.com/connect?name={}", pk),
-        None => {
-            // Kein Key-Pair vorhanden -> falls ollama binary da ist, wird
-            // "ollama signin" den Key generieren. Andernfalls Fallback.
-            "https://ollama.com/connect".to_string()
-        }
+        None => "https://ollama.com/connect".to_string(),
     };
 
     let browser_ok = open_url_nonblocking(&app, &connect_url);
 
-    // Schritt 4: Falls ollama binary verfuegbar -> "ollama signin" im Hintergrund starten
-    // Das oeffnet ggf. nochmal den Browser und pollt bis der User "Connect" klickt.
     let has_binary = ollama_bin.is_some();
     if let Some(ref bin) = ollama_bin {
         AUTH_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
         let bin_clone = bin.clone();
-        // Background-Task: ollama signin ausfuehren
         tokio::spawn(async move {
-            // ollama signin blockiert bis der User authentifiziert ist
-            // oder bis es fehlschlaegt. Wir fuehren es asynchron aus.
             let result = tokio::process::Command::new(&bin_clone)
                 .arg("signin")
                 .stdout(std::process::Stdio::piped())
@@ -470,7 +898,6 @@ async fn start_ollama_auth(app: tauri::AppHandle) -> Result<String, String> {
 
             match result {
                 Ok(mut child) => {
-                    // Warte bis der Prozess beendet ist (oder timeout nach 120s)
                     let timeout = tokio::time::Duration::from_secs(120);
                     match tokio::time::timeout(timeout, child.wait()).await {
                         Ok(Ok(status)) => {
@@ -496,7 +923,6 @@ async fn start_ollama_auth(app: tauri::AppHandle) -> Result<String, String> {
         });
     }
 
-    // Schritt 5: JSON-Response bauen
     let response = serde_json::json!({
         "success": browser_ok.is_ok(),
         "message": if has_binary {
@@ -513,15 +939,12 @@ async fn start_ollama_auth(app: tauri::AppHandle) -> Result<String, String> {
     serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e))
 }
 
-/// Prueft den Status des Ollama Device-Auth-Flows.
-/// Return: {authenticated: bool, message: "...", method: "device"|"key"|"none"}
 #[tauri::command]
 async fn check_auth_status() -> Result<String, String> {
     let running = AUTH_RUNNING.load(std::sync::atomic::Ordering::SeqCst);
     let done = AUTH_DONE.load(std::sync::atomic::Ordering::SeqCst);
 
     if done {
-        // Auth abgeschlossen -> verifizieren durch Cloud-Modell-Pull
         let authenticated = verify_ollama_auth().await;
         let response = serde_json::json!({
             "authenticated": authenticated,
@@ -540,7 +963,6 @@ async fn check_auth_status() -> Result<String, String> {
         return serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e));
     }
 
-    // Weder running noch done -> pruefen ob bereits eingeloggt
     let authenticated = verify_ollama_auth().await;
     let response = serde_json::json!({
         "authenticated": authenticated,
@@ -550,20 +972,14 @@ async fn check_auth_status() -> Result<String, String> {
     serde_json::to_string(&response).map_err(|e| format!("JSON-Fehler: {}", e))
 }
 
-/// Bricht den Auth-Flow ab (killt den background signin Prozess).
 #[tauri::command]
 async fn stop_auth() -> Result<bool, String> {
     AUTH_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
-    // Der background task prueft AUTH_RUNNING und beendet sich
     Ok(true)
 }
 
-/// Verifiziert Ollama-Auth durch Versuch einen Cloud-Modell-Pull.
-/// Wenn der Pull funktioniert -> authentifiziert.
-/// Wenn 401/403 -> nicht authentifiziert.
 async fn verify_ollama_auth() -> bool {
     let client = http_client_short();
-    // Versuche einen Cloud-Modell-Pull (kleiner stub)
     let url = "http://localhost:11434/api/pull";
     let body = serde_json::json!({"name": "glm-5.2:cloud"});
 
@@ -571,24 +987,19 @@ async fn verify_ollama_auth() -> bool {
         Ok(resp) => {
             let status = resp.status();
             if status.is_success() {
-                // Erfolgreich -> authentifiziert
                 return true;
             }
             if status.as_u16() == 401 || status.as_u16() == 403 {
                 return false;
             }
-            // Andere Status -> vielleicht authentifiziert aber anderer Fehler
-            // Pruefe /api/tags fuer Cloud-Modelle
             return check_cloud_models().await;
         }
         Err(_) => {
-            // Ollama API nicht erreichbar -> pruefe ollama signin Status
             return check_signin_status().await;
         }
     }
 }
 
-/// Prueft ob Cloud-Modelle in /api/tags verfuegbar sind (Indikator fuer Auth).
 async fn check_cloud_models() -> bool {
     let client = http_client_short();
     match client.get("http://localhost:11434/api/tags").send().await {
@@ -614,14 +1025,11 @@ async fn check_cloud_models() -> bool {
     }
 }
 
-/// Prueft "ollama signin" Status durch Ausfuehrung (non-interactive).
-/// Wenn "already signed in" -> true.
 async fn check_signin_status() -> bool {
     let bin = match find_ollama_binary() {
         Some(b) => b,
         None => return false,
     };
-    // ollama signin gibt "You are already signed in" aus wenn bereits eingeloggt
     match tokio::process::Command::new(&bin)
         .arg("signin")
         .stdout(std::process::Stdio::piped())
@@ -639,17 +1047,6 @@ async fn check_signin_status() -> bool {
     }
 }
 
-/// HTTP Client mit kurzem Timeout fuer Auth-Checks
-fn http_client_short() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-}
-
-/// Ollama Login im Browser oeffnen (Fallback / manuelle Methode).
-/// Oeffnet https://ollama.com/connect im Standard-Browser.
-/// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_login(app: tauri::AppHandle) -> Result<bool, String> {
     let pubkey = read_ollama_pubkey();
@@ -660,31 +1057,28 @@ async fn open_ollama_login(app: tauri::AppHandle) -> Result<bool, String> {
     open_url_nonblocking(&app, &login_url)
 }
 
-/// Ollama API Keys Seite im Browser oeffnen (Fallback).
-/// Oeffnet https://ollama.com/settings/keys
-/// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_keys(app: tauri::AppHandle) -> Result<bool, String> {
     let keys_url = "https://ollama.com/settings/keys".to_string();
     open_url_nonblocking(&app, &keys_url)
 }
 
-/// Hilfsfunktion: Oeffnet URL im Standard-Browser, non-blocking.
-/// Versucht zuerst tauri-plugin-opener, faellt auf std::process::Command zurueck.
 fn open_url_nonblocking(app: &tauri::AppHandle, url: &str) -> Result<bool, String> {
-    // Versuch 1: tauri-plugin-opener (non-blocking)
     match app.opener().open_url(url, None::<&str>) {
         Ok(_) => return Ok(true),
         Err(e) => {
             eprintln!("Opener-Plugin fehlgeschaltet ({}), versuche std::process::Command", e);
         }
     }
-    // Versuch 2: std::process::Command mit spawn() (non-blocking, wartet nicht)
     match std::process::Command::new("open").arg(url).spawn() {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("Konnte Browser nicht oeffnen: {}", e)),
     }
 }
+
+// ============================================================================
+// APP ENTRY POINT
+// ============================================================================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -694,31 +1088,89 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            // Chat
             ollama_chat,
             ollama_list_models,
             ollama_health,
             system_command,
+            // Activity Feed
+            log_activity,
+            get_activities,
+            clear_activities,
+            // Agent Spawning
+            spawn_agent,
+            get_agent_status,
+            list_agents,
+            stop_agent,
+            pause_agent,
+            resume_agent,
+            // System Access
             read_file,
             write_file,
             list_dir,
-            memory_create_session,
-            memory_add_message,
-            memory_get_sessions,
-            memory_get_messages,
-            memory_delete_session,
-            memory_search,
-            memory_clear_all,
-            skills_list,
+            execute_command,
+            execute_command_async,
+            get_system_info,
+            screenshot,
+            open_app,
+            open_url,
+            clipboard_read,
+            clipboard_write,
+            // Settings / Bypass Permissions
+            get_settings,
+            set_setting,
+            // Vision
+            analyze_image,
+            analyze_screenshot,
+            list_vision_models,
+            // Continuous Mode
+            start_continuous_task,
+            pause_continuous_task,
+            resume_continuous_task,
+            stop_continuous_task,
+            get_continuous_tasks,
+            // 3-Zone Memory
+            memory_add_core,
+            memory_search_core,
+            memory_edit_core,
+            memory_delete_core,
+            memory_add_skill,
+            memory_search_skills,
+            memory_delete_skill,
+            memory_add_sensitive,
+            memory_search_sensitive,
+            memory_edit_sensitive,
+            memory_delete_sensitive,
+            memory_get_sensitive_value,
+            memory_get_zone,
+            memory_get_all,
+            memory_clear_zone,
+            // Password Manager
+            password_manager_list,
+            password_manager_search,
+            password_manager_add,
+            password_manager_edit,
+            password_manager_delete,
+            password_manager_link,
+            password_manager_export,
+            password_manager_import,
+            // Skill Hub
+            list_skills,
+            get_skill_details,
+            execute_skill,
+            // Legacy
             skills_match,
             skills_execute,
             app_version,
             default_system_prompt,
             memory_path,
+            // Ollama Auth
             open_ollama_login,
             open_ollama_keys,
             start_ollama_auth,
             check_auth_status,
             stop_auth,
+            // Update
             update::check_github_release,
             update::download_update,
             update::install_update,

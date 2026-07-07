@@ -6,6 +6,7 @@
   <title>Titan Toti</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="update.css" />
+  <!-- Three.js wird dynamisch in main.js geladen (als globales Script) -->
 </head>
 <body>
 
@@ -27,14 +28,14 @@
           <div class="setup-option-icon">🏠</div>
           <div class="setup-option-text">
             <div class="setup-option-title">Lokal (Ollama auf diesem Mac)</div>
-            <div class="setup-option-desc">http://localhost:11434 — kein API-Key nötig</div>
+            <div class="setup-option-desc">http://localhost:11434 — kein API-Key noetig</div>
           </div>
         </button>
         <button class="setup-option" data-mode="cloud">
           <div class="setup-option-icon">☁️</div>
           <div class="setup-option-text">
             <div class="setup-option-title">Ollama Cloud</div>
-            <div class="setup-option-desc">Login im Browser — API Key wird kopiert und eingefügt</div>
+            <div class="setup-option-desc">Login im Browser — API Key wird kopiert und eingefuegt</div>
           </div>
         </button>
         <button class="setup-option" data-mode="custom">
@@ -56,10 +57,10 @@
           <input type="password" id="setupApiKey" placeholder="API Key..." />
         </div>
         <div class="form-group">
-          <label>Modell wählen</label>
+          <label>Modell waehlen</label>
           <div class="input-row">
-            <input type="text" id="setupModelDisplay" placeholder="Klicke um Modell zu wählen" readonly style="cursor:pointer;flex:1;" />
-            <button class="btn-secondary" id="setupModelChooseBtn">Modell wählen</button>
+            <input type="text" id="setupModelDisplay" placeholder="Klicke um Modell zu waehlen" readonly style="cursor:pointer;flex:1;" />
+            <button class="btn-secondary" id="setupModelChooseBtn">Modell waehlen</button>
           </div>
           <input type="text" id="setupModelInput" placeholder="Oder Modellnamen eingeben (z.B. llama3.2)" style="margin-top:8px;" />
           <div class="hint" id="setupModelStatus"></div>
@@ -94,7 +95,7 @@
           </svg>
           <div class="logo-text">
             <span class="logo-title">Titan Toti</span>
-            <span class="logo-version" id="appVersion">v2.2.0</span>
+            <span class="logo-version" id="appVersion">v2.3.0</span>
           </div>
         </div>
       </div>
@@ -104,19 +105,34 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span>Chat</span>
         </button>
+        <button class="nav-item" data-view="activity">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span>Activity</span>
+          <span class="nav-badge" id="activityNavBadge" style="display:none;">0</span>
+        </button>
         <button class="nav-item" data-view="memory">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4.5 4.5 0 0 0-4.5 4.5A4.5 4.5 0 0 0 3 11a4.5 4.5 0 0 0 4.5 4.5A4.5 4.5 0 0 0 12 20a4.5 4.5 0 0 0 4.5-4.5A4.5 4.5 0 0 0 21 11a4.5 4.5 0 0 0-4.5-4.5A4.5 4.5 0 0 0 12 2z"/><line x1="12" y1="2" x2="12" y2="20"/></svg>
           <span>Memory</span>
         </button>
         <button class="nav-item" data-view="skills">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <span>Skills</span>
         </button>
+        <button class="nav-item" data-view="passwords">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span>Passwoerter</span>
+        </button>
         <button class="nav-item" data-view="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Einstellungen</span>
         </button>
       </nav>
+
+      <!-- ACTIVE AGENTS -->
+      <div class="sidebar-agents" id="sidebarAgents" style="display:none;">
+        <div class="agents-label">Aktive Agenten</div>
+        <div id="agentsList"></div>
+      </div>
 
       <div class="sidebar-footer">
         <div class="status-row">
@@ -143,6 +159,12 @@
           </div>
         </div>
 
+        <!-- ACTIVITY BADGE (wenn Titan arbeitet) -->
+        <div class="chat-activity-badge" id="chatActivityBadge" style="display:none;">
+          <span class="activity-badge-spinner"></span>
+          <span id="chatActivityText">Titan arbeitet...</span>
+        </div>
+
         <div class="chat-container">
           <div class="chat-messages" id="chatMessages">
             <div class="chat-welcome" id="chatWelcome">
@@ -150,7 +172,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
               </div>
               <h2>Willkommen bei Titan Toti</h2>
-              <p>Stelle eine Frage, starte ein Gespraech oder probiere einen Skill: "oeffne Safari", "screenshot", "system info". Tippe /help fuer alle Befehle.</p>
+              <p>Stelle eine Frage, starte ein Gespraech oder probiere einen Skill. Tippe /help fuer alle Befehle.</p>
             </div>
           </div>
 
@@ -159,6 +181,18 @@
           </div>
 
           <div class="chat-input-area">
+            <div class="chat-input-toolbar">
+              <button class="chat-tool-btn" id="attachImageBtn" title="Bild anhaengen (Vision)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </button>
+              <button class="chat-tool-btn" id="screenshotBtn" title="Screenshot machen und analysieren">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </button>
+              <button class="chat-tool-btn" id="agentSpawnBtn" title="Agent starten">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </button>
+              <input type="file" id="imageFileInput" accept="image/*" style="display:none;" />
+            </div>
             <div class="chat-input-wrapper">
               <div id="fileDropHint" class="file-drop-hint" style="display:none;">Datei ablegen — wird als Context gesendet</div>
               <textarea id="chatInput" class="chat-input" placeholder="Nachricht schreiben... (/help fuer Befehle)" rows="1"></textarea>
@@ -171,31 +205,113 @@
         </div>
       </section>
 
-      <!-- MEMORY VIEW -->
+      <!-- ACTIVITY VIEW -->
+      <section class="view" id="view-activity">
+        <div class="view-header">
+          <h1>Activity Feed</h1>
+          <div class="chat-actions">
+            <select id="activityFilter" class="session-select" title="Activity-Typ filtern">
+              <option value="">Alle</option>
+              <option value="thinking">Denken</option>
+              <option value="action">Aktion</option>
+              <option value="skill">Skill</option>
+              <option value="file_read">Datei gelesen</option>
+              <option value="file_write">Datei geschrieben</option>
+              <option value="command">Befehl</option>
+              <option value="agent_started">Agent gestartet</option>
+              <option value="agent_completed">Agent abgeschlossen</option>
+              <option value="error">Fehler</option>
+              <option value="memory_saved">Memory gespeichert</option>
+            </select>
+            <button class="btn-secondary" id="clearActivityBtn">Leeren</button>
+          </div>
+        </div>
+        <div class="activity-list" id="activityList">
+          <div class="empty-state"><p>Lade Activities...</p></div>
+        </div>
+      </section>
+
+      <!-- MEMORY VIEW (3D GEHIRN) -->
       <section class="view" id="view-memory">
         <div class="view-header">
-          <h1>Memory</h1>
+          <h1>Memory — 3D Gehirn</h1>
           <button class="btn-secondary" id="refreshMemoryBtn">Aktualisieren</button>
         </div>
-        <div class="search-bar">
-          <input type="text" id="memorySearch" placeholder="Memory durchsuchen..." />
-        </div>
-        <div class="memory-list" id="memoryList">
-          <div class="empty-state"><p>Lade Memory...</p></div>
+        <div class="memory-brain-container">
+          <div class="brain-canvas-wrap" id="brainCanvasWrap">
+            <canvas id="brainCanvas"></canvas>
+            <div class="brain-tooltip" id="brainTooltip" style="display:none;"></div>
+            <div class="brain-loading" id="brainLoading">Lade 3D Gehirn...</div>
+            <div class="brain-zones-hint">
+              <span class="zone-hint zone-core">● Core</span>
+              <span class="zone-hint zone-skills">● Skills</span>
+              <span class="zone-hint zone-sensitive">● Sensitiv</span>
+            </div>
+          </div>
+          <div class="memory-zone-panel">
+            <div class="zone-panel-header">
+              <h2 id="zonePanelTitle">Waehle eine Gehirn-Zone</h2>
+              <button class="btn-primary" id="memoryAddBtn" style="display:none;">Hinzufuegen</button>
+            </div>
+            <div class="search-bar">
+              <input type="text" id="memoryZoneSearch" placeholder="Eintraege durchsuchen..." />
+            </div>
+            <div class="memory-zone-list" id="memoryZoneList">
+              <div class="empty-state"><p>Klicke auf eine Zone im Gehirn um Eintraege zu sehen.</p></div>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- SKILLS VIEW -->
       <section class="view" id="view-skills">
         <div class="view-header">
-          <h1>Skills</h1>
+          <h1>Skill Hub</h1>
           <span class="badge" id="skillsCount">0</span>
+          <button class="btn-secondary" id="customSkillBtn" style="margin-left:8px;">Custom Skill</button>
         </div>
         <div class="search-bar">
           <input type="text" id="skillsSearch" placeholder="Skills durchsuchen..." />
+          <select id="skillsCategoryFilter" class="session-select" style="margin-top:8px;">
+            <option value="">Alle Kategorien</option>
+            <option value="System">System</option>
+            <option value="Files">Files</option>
+            <option value="Web">Web</option>
+            <option value="Vision">Vision</option>
+            <option value="Development">Development</option>
+            <option value="Utilities">Utilities</option>
+          </select>
         </div>
         <div class="skills-grid" id="skillsGrid">
           <div class="empty-state"><p>Lade Skills...</p></div>
+        </div>
+      </section>
+
+      <!-- PASSWORD MANAGER VIEW -->
+      <section class="view" id="view-passwords">
+        <div class="view-header">
+          <h1>Password Manager</h1>
+          <div class="chat-actions">
+            <button class="btn-secondary" id="pwExportBtn">Export</button>
+            <button class="btn-secondary" id="pwImportBtn">Import</button>
+            <button class="btn-primary" id="pwAddBtn">Hinzufuegen</button>
+            <input type="file" id="pwImportInput" accept=".json,.csv" style="display:none;" />
+          </div>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="pwSearch" placeholder="Passwoerter durchsuchen (Titel, Username, URL, Email)..." />
+        </div>
+        <div class="pw-tabs" id="pwTabs">
+          <button class="pw-tab active" data-group="">Alle</button>
+          <button class="pw-tab" data-group="Passwoerter">Passwoerter</button>
+          <button class="pw-tab" data-group="Mail-Adressen">Mail-Adressen</button>
+          <button class="pw-tab" data-group="API Keys">API Keys</button>
+          <button class="pw-tab" data-group="Tokens">Tokens</button>
+          <button class="pw-tab" data-group="Bankdaten">Bankdaten</button>
+          <button class="pw-tab" data-group="Sonstiges">Sonstiges</button>
+        </div>
+        <div class="pw-list" id="pwList">
+          <div class="empty-state"><p>Lade Passwort-Manager...</p></div>
         </div>
       </section>
 
@@ -216,16 +332,16 @@
               <label>API Key</label>
               <div class="input-row" style="margin-bottom:8px;">
                 <input type="password" id="apiKeyInput" placeholder="leer fuer lokal" style="flex:1;" />
-                <button class="btn-secondary" id="openOllamaLoginBtn" style="white-space:nowrap;">Mit Ollama verbinden</button>
+                <button class="btn-secondary" id="openOllamaLoginBtn" style="white-space:nowrap;">Ollama Connect</button>
               </div>
-              <p class="hint">Klicke "Mit Ollama verbinden" um den Device-Auth-Flow zu starten. Ein Browser öffnet sich mit einer "Connect"-Seite — klicke auf "Connect" um die App zu authentifizieren.</p>
+              <p class="hint">Klicke "Ollama Connect" um den Device-Auth-Flow zu starten.</p>
               <div class="hint" id="ollamaLoginStatus"></div>
             </div>
             <div class="form-group">
               <label>Hauptmodell</label>
               <div class="input-row">
-                <input type="text" id="modelDisplay" placeholder="Klicke um Modell zu wählen" readonly style="cursor:pointer;flex:1;" />
-                <button class="btn-secondary" id="settingsModelChooseBtn">Modell ändern</button>
+                <input type="text" id="modelDisplay" placeholder="Klicke um Modell zu waehlen" readonly style="cursor:pointer;flex:1;" />
+                <button class="btn-secondary" id="settingsModelChooseBtn">Modell aendern</button>
               </div>
               <div class="hint" id="settingsModelStatus"></div>
             </div>
@@ -256,11 +372,11 @@
             <div class="form-group">
               <textarea id="systemPromptInput" rows="4" style="width:100%;resize:vertical;font-family:inherit;"></textarea>
             </div>
-            <button class="btn-secondary" id="resetPromptBtn">Zurücksetzen</button>
+            <button class="btn-secondary" id="resetPromptBtn">Zuruecksetzen</button>
           </div>
 
           <div class="settings-card">
-            <h2 class="settings-card-title">System-Zugriff & Skills</h2>
+            <h2 class="settings-card-title">System-Zugriff & Sicherheit</h2>
             <div class="form-group">
               <label>System-Zugriff (Commands, Dateien, Apps)</label>
               <div class="toggle-row">
@@ -274,6 +390,18 @@
               <p class="hint">Wenn aktiviert, kann Titan Toti System-Befehle ausfuehren, Dateien lesen/schreiben und Apps oeffnen.</p>
             </div>
             <div class="form-group">
+              <label>Bypass Permissions — ACHTUNG</label>
+              <div class="toggle-row">
+                <span>Aus</span>
+                <label class="switch bypass-switch">
+                  <input type="checkbox" id="bypassPermissionsToggle" />
+                  <span class="slider bypass-slider"></span>
+                </label>
+                <span>Ein</span>
+              </div>
+              <p class="hint bypass-warning" id="bypassWarning" style="display:none;">Achtung: Titan kann Befehle ohne Bestaetigung ausfuehren!</p>
+            </div>
+            <div class="form-group">
               <label>Skills aktiviert</label>
               <div class="toggle-row">
                 <span>Aus</span>
@@ -283,6 +411,29 @@
                 </label>
                 <span>Ein</span>
               </div>
+            </div>
+            <div class="form-group">
+              <label>Auto-Screenshot</label>
+              <div class="toggle-row">
+                <span>Aus</span>
+                <label class="switch">
+                  <input type="checkbox" id="autoScreenshotToggle" />
+                  <span class="slider"></span>
+                </label>
+                <span>Ein</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Continuous Mode</label>
+              <div class="toggle-row">
+                <span>Aus</span>
+                <label class="switch">
+                  <input type="checkbox" id="continuousModeToggle" />
+                  <span class="slider"></span>
+                </label>
+                <span>Ein</span>
+              </div>
+              <p class="hint">Im Continuous Mode arbeitet Titan selbststaendig weiter bis gestoppt.</p>
             </div>
           </div>
 
@@ -311,9 +462,21 @@
               <p class="hint">Alle Daten liegen lokal auf diesem Mac. Keine Daten werden an Server gesendet (ausser API-Calls an Ollama).</p>
               <div class="btn-row">
                 <button class="btn-secondary" id="exportDataBtn">Daten exportieren</button>
-                <button class="btn-danger" id="deleteDataBtn">Alle Daten löschen</button>
+                <button class="btn-danger" id="deleteDataBtn">Alle Daten loeschen</button>
               </div>
               <div class="hint" id="dsvoStatus"></div>
+            </div>
+          </div>
+
+          <div class="settings-card" id="updateSettingsCard">
+            <h2 class="settings-card-title">Updates</h2>
+            <div class="form-group">
+              <label>Aktuelle Version</label>
+              <div class="hint" id="currentVersionDisplay">Wird geladen...</div>
+            </div>
+            <div class="form-group">
+              <button class="btn-secondary" id="checkUpdatesBtn">Nach Updates suchen</button>
+              <div class="hint" id="updateCheckStatus"></div>
             </div>
           </div>
 
@@ -327,8 +490,8 @@
   <div id="modelModal" class="modal" style="display:none;">
     <div class="modal-content">
       <div class="modal-header">
-        <h2 id="modelModalTitle">Modell wählen</h2>
-        <button class="modal-close" id="modelModalClose" title="Schließen">×</button>
+        <h2 id="modelModalTitle">Modell waehlen</h2>
+        <button class="modal-close" id="modelModalClose" title="Schliessen">x</button>
       </div>
       <div class="modal-search">
         <input type="text" id="modelSearchInput" placeholder="Modelle durchsuchen..." />
@@ -345,44 +508,181 @@
     <div class="modal-content" style="max-width:480px;">
       <div class="modal-header">
         <h2>Mit Ollama verbinden</h2>
-        <button class="modal-close" id="ollamaConnectClose" title="Schließen">×</button>
+        <button class="modal-close" id="ollamaConnectClose" title="Schliessen">x</button>
       </div>
       <div style="padding:0 20px 20px;">
-        <!-- Device-Auth-Flow: Browser oeffnet sich mit "Connect" Button -->
         <p class="hint" style="margin-bottom:16px;font-size:13px;line-height:1.6;" id="ollamaConnectIntro">
-          Ein Browser-Fenster mit der Ollama "Connect"-Seite wurde geöffnet. Bitte klicke im Browser auf "Connect" um die App zu authentifizieren.
+          Ein Browser-Fenster mit der Ollama "Connect"-Seite wurde geoeffnet. Bitte klicke im Browser auf "Connect" um die App zu authentifizieren.
         </p>
-
-        <!-- Status-Anzeige -->
         <div class="hint" id="ollamaConnectStatus" style="margin-bottom:12px;"></div>
-
-        <!-- Progress-Spinner (waehrend Polling) -->
         <div id="ollamaConnectSpinner" style="display:none;text-align:center;padding:12px 0;">
           <span class="ollama-spinner"></span>
-          <p style="margin-top:8px;font-size:13px;color:#888;" id="ollamaConnectPollMsg">Warte auf Bestätigung im Browser...</p>
+          <p style="margin-top:8px;font-size:13px;color:#888;" id="ollamaConnectPollMsg">Warte auf Bestaetigung im Browser...</p>
         </div>
-
-        <!-- Erfolg / Fehler -->
         <div id="ollamaConnectResult" style="display:none;text-align:center;padding:12px 0;"></div>
-
-        <!-- Fallback: Manueller API-Key (einklappbar) -->
         <details id="ollamaConnectFallback" style="margin-top:16px;border-top:1px solid #e0e0e0;padding-top:12px;">
           <summary style="cursor:pointer;font-size:13px;color:#666;">API Key manuell eingeben (Fallback)</summary>
           <div style="margin-top:12px;">
-            <p class="hint" style="font-size:12px;margin-bottom:8px;">Falls der automatische Flow nicht funktioniert: Logge dich auf ollama.com ein, kopiere deinen API Key und füge ihn hier ein.</p>
+            <p class="hint" style="font-size:12px;margin-bottom:8px;">Falls der automatische Flow nicht funktioniert: Logge dich auf ollama.com ein, kopiere deinen API Key und fuege ihn hier ein.</p>
             <div class="form-group">
               <label>API Key</label>
-              <input type="password" id="ollamaConnectKey" placeholder="oll-... API Key einfügen" />
+              <input type="password" id="ollamaConnectKey" placeholder="oll-... API Key einfuegen" />
             </div>
             <div class="btn-row" style="margin-bottom:12px;">
-              <button class="btn-secondary" id="ollamaReopenLoginBtn" style="flex:1;">Connect-Seite öffnen</button>
-              <button class="btn-secondary" id="ollamaOpenKeysBtn" style="flex:1;">API Keys öffnen</button>
+              <button class="btn-secondary" id="ollamaReopenLoginBtn" style="flex:1;">Connect-Seite oeffnen</button>
+              <button class="btn-secondary" id="ollamaOpenKeysBtn" style="flex:1;">API Keys oeffnen</button>
             </div>
             <div class="form-group">
               <button class="btn-primary" id="ollamaConnectConfirmBtn" style="width:100%;">Mit API Key verbinden</button>
             </div>
           </div>
         </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- SKILL EXECUTE MODAL -->
+  <div id="skillModalBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="skillModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 id="skillModalTitle">Skill ausfuehren</h2>
+        <button class="modal-close" id="skillModalClose" title="Schliessen">x</button>
+      </div>
+      <div style="padding:20px;">
+        <p class="hint" id="skillModalDesc" style="margin-bottom:16px;"></p>
+        <div id="skillModalParams"></div>
+        <div class="btn-row" style="margin-top:16px;">
+          <button class="btn-primary" id="skillExecuteBtn">Ausfuehren</button>
+          <button class="btn-secondary" id="skillToChatBtn" style="display:none;">Zum Chat senden</button>
+        </div>
+        <div id="skillResultArea" style="display:none;margin-top:16px;">
+          <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;">Ergebnis</label>
+          <div class="skill-result-box" id="skillResultBox"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MEMORY EDIT MODAL -->
+  <div id="memoryEditBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="memoryEditModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 id="memoryEditTitle">Eintrag bearbeiten</h2>
+        <button class="modal-close" id="memoryEditClose" title="Schliessen">x</button>
+      </div>
+      <div style="padding:20px;">
+        <div class="form-group">
+          <label>Key / Titel</label>
+          <input type="text" id="memoryEditKey" placeholder="z.B. user_name" />
+        </div>
+        <div class="form-group">
+          <label>Wert</label>
+          <textarea id="memoryEditValue" rows="4" style="width:100%;resize:vertical;font-family:inherit;" placeholder="Wert..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Tags (kommasepariert)</label>
+          <input type="text" id="memoryEditTags" placeholder="tag1, tag2" />
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="memoryEditSave">Speichern</button>
+          <button class="btn-secondary" id="memoryEditCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PASSWORD EDIT MODAL -->
+  <div id="pwEditBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="pwEditModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:520px;">
+      <div class="modal-header">
+        <h2 id="pwEditTitle">Eintrag bearbeiten</h2>
+        <button class="modal-close" id="pwEditClose" title="Schliessen">x</button>
+      </div>
+      <div style="padding:20px;">
+        <div class="form-group">
+          <label>Titel</label>
+          <input type="text" id="pwEditTitleField" placeholder="z.B. GitHub" />
+        </div>
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="pwEditUsername" placeholder="Username / E-Mail" />
+        </div>
+        <div class="form-group">
+          <label>Wert / Passwort</label>
+          <input type="password" id="pwEditValue" placeholder="Passwort / API Key" />
+        </div>
+        <div class="form-group">
+          <label>URL</label>
+          <input type="text" id="pwEditUrl" placeholder="https://..." />
+        </div>
+        <div class="form-group">
+          <label>E-Mail</label>
+          <input type="text" id="pwEditEmail" placeholder="email@example.com" />
+        </div>
+        <div class="form-group">
+          <label>Gruppe</label>
+          <select id="pwEditGroup">
+            <option value="Passwoerter">Passwoerter</option>
+            <option value="Mail-Adressen">Mail-Adressen</option>
+            <option value="API Keys">API Keys</option>
+            <option value="Tokens">Tokens</option>
+            <option value="Bankdaten">Bankdaten</option>
+            <option value="Sonstiges">Sonstiges</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notizen</label>
+          <textarea id="pwEditNotes" rows="2" style="width:100%;resize:vertical;font-family:inherit;" placeholder="Zusaetzliche Notizen..."></textarea>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="pwEditSave">Speichern</button>
+          <button class="btn-secondary" id="pwEditCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AGENT SPAWN MODAL -->
+  <div id="agentModalBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="agentModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:480px;">
+      <div class="modal-header">
+        <h2>Agent starten</h2>
+        <button class="modal-close" id="agentModalClose" title="Schliessen">x</button>
+      </div>
+      <div style="padding:20px;">
+        <div class="form-group">
+          <label>Aufgabe</label>
+          <textarea id="agentTaskInput" rows="3" style="width:100%;resize:vertical;font-family:inherit;" placeholder="Beschreibe die Aufgabe des Agenten..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Modell (optional)</label>
+          <input type="text" id="agentModelInput" placeholder="Standardmodell wird verwendet" />
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="agentStartBtn">Agent starten</button>
+          <button class="btn-secondary" id="agentCancelBtn">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRM DIALOG -->
+  <div id="confirmBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="confirmModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:400px;">
+      <div class="modal-header">
+        <h2 id="confirmTitle">Bestaetigen</h2>
+      </div>
+      <div style="padding:20px;">
+        <p id="confirmMessage" style="margin-bottom:16px;"></p>
+        <div class="btn-row">
+          <button class="btn-danger" id="confirmYesBtn">Ja, loeschen</button>
+          <button class="btn-secondary" id="confirmNoBtn">Abbrechen</button>
+        </div>
       </div>
     </div>
   </div>
