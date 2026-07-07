@@ -1,4 +1,4 @@
-// Titan Toti v2 — Standalone Backend (Rust)
+// Titan Toti v2.2 — Standalone Backend (Rust)
 // Direkte Ollama API Anbindung + Local Skills + Memory + System Access
 // KEINE Backticks in diesem File
 
@@ -8,8 +8,9 @@ mod update;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tauri_plugin_opener::OpenerExt;
 
-const APP_VERSION: &str = "2.0.0";
+const APP_VERSION: &str = "2.2.0";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
 
@@ -370,6 +371,26 @@ fn memory_path() -> String {
     memory::memory_file_path().to_string_lossy().to_string()
 }
 
+/// Ollama Login im Browser oeffnen (vereinfachter OAuth-aehnlicher Flow)
+/// Oeffnet https://ollama.com/login im Standard-Browser.
+/// Der User loggt sich ein, kopiert seinen API Key und fuegt ihn in der App ein.
+#[tauri::command]
+async fn open_ollama_login(app: tauri::AppHandle) -> Result<bool, String> {
+    let login_url = "https://ollama.com/login";
+    app.opener().open_url(login_url, None::<&str>)
+        .map_err(|e| format!("Konnte Browser nicht oeffnen: {}", e))?;
+    Ok(true)
+}
+
+/// Ollama API Keys Seite im Browser oeffnen
+#[tauri::command]
+async fn open_ollama_keys(app: tauri::AppHandle) -> Result<bool, String> {
+    let keys_url = "https://ollama.com/settings/keys";
+    app.opener().open_url(keys_url, None::<&str>)
+        .map_err(|e| format!("Konnte Browser nicht oeffnen: {}", e))?;
+    Ok(true)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -398,6 +419,8 @@ pub fn run() {
             app_version,
             default_system_prompt,
             memory_path,
+            open_ollama_login,
+            open_ollama_keys,
             update::check_github_release,
             update::download_update,
             update::install_update,

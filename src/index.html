@@ -34,7 +34,7 @@
           <div class="setup-option-icon">☁️</div>
           <div class="setup-option-text">
             <div class="setup-option-title">Ollama Cloud</div>
-            <div class="setup-option-desc">https://api.ollama.ai — API-Key erforderlich</div>
+            <div class="setup-option-desc">Login im Browser — API Key wird kopiert und eingefügt</div>
           </div>
         </button>
         <button class="setup-option" data-mode="custom">
@@ -56,14 +56,13 @@
           <input type="password" id="setupApiKey" placeholder="API Key..." />
         </div>
         <div class="form-group">
-          <label for="setupModelSelect">Modell wählen</label>
+          <label>Modell wählen</label>
           <div class="input-row">
-            <select id="setupModelSelect">
-              <option value="">Modelle werden geladen...</option>
-            </select>
-            <button class="btn-secondary" id="refreshModelsBtn">Modelle laden</button>
+            <input type="text" id="setupModelDisplay" placeholder="Klicke um Modell zu wählen" readonly style="cursor:pointer;flex:1;" />
+            <button class="btn-secondary" id="setupModelChooseBtn">Modell wählen</button>
           </div>
           <input type="text" id="setupModelInput" placeholder="Oder Modellnamen eingeben (z.B. llama3.2)" style="margin-top:8px;" />
+          <div class="hint" id="setupModelStatus"></div>
         </div>
 
         <div class="setup-actions">
@@ -95,7 +94,7 @@
           </svg>
           <div class="logo-text">
             <span class="logo-title">Titan Toti</span>
-            <span class="logo-version" id="appVersion">v2.1.0</span>
+            <span class="logo-version" id="appVersion">v2.2.0</span>
           </div>
         </div>
       </div>
@@ -214,15 +213,21 @@
               <input type="text" id="apiUrlInput" placeholder="http://localhost:11434" />
             </div>
             <div class="form-group">
-              <label for="apiKeyInput">API Key (optional)</label>
-              <input type="password" id="apiKeyInput" placeholder="leer fuer lokal" />
+              <label>API Key</label>
+              <div class="input-row" style="margin-bottom:8px;">
+                <input type="password" id="apiKeyInput" placeholder="leer fuer lokal" style="flex:1;" />
+                <button class="btn-secondary" id="openOllamaLoginBtn" style="white-space:nowrap;">Mit Ollama verbinden</button>
+              </div>
+              <p class="hint">Klicke "Mit Ollama verbinden" um den Browser zu öffnen. Nach dem Login kopiere deinen API Key und füge ihn oben ein.</p>
+              <div class="hint" id="ollamaLoginStatus"></div>
             </div>
             <div class="form-group">
-              <label for="modelSelect">Hauptmodell</label>
+              <label>Hauptmodell</label>
               <div class="input-row">
-                <select id="modelSelect"><option value="glm-5.2:cloud">glm-5.2:cloud</option></select>
-                <button class="btn-secondary" id="refreshModelsSettingsBtn">Modelle laden</button>
+                <input type="text" id="modelDisplay" placeholder="Klicke um Modell zu wählen" readonly style="cursor:pointer;flex:1;" />
+                <button class="btn-secondary" id="settingsModelChooseBtn">Modell ändern</button>
               </div>
+              <div class="hint" id="settingsModelStatus"></div>
             </div>
             <div class="form-group">
               <label for="fallbackModelsInput">Fallback-Modelle (kommasepariert)</label>
@@ -315,6 +320,51 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- MODELL-AUSWAHL MODAL -->
+  <div id="modelModalBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="modelModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modelModalTitle">Modell wählen</h2>
+        <button class="modal-close" id="modelModalClose" title="Schließen">×</button>
+      </div>
+      <div class="modal-search">
+        <input type="text" id="modelSearchInput" placeholder="Modelle durchsuchen..." />
+      </div>
+      <div class="model-list" id="modelListContainer">
+        <div class="empty-state"><p>Lade Modelle...</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OLLAMA CONNECT MODAL -->
+  <div id="ollamaConnectBackdrop" class="modal-backdrop" style="display:none;"></div>
+  <div id="ollamaConnectModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:460px;">
+      <div class="modal-header">
+        <h2>Mit Ollama verbinden</h2>
+        <button class="modal-close" id="ollamaConnectClose" title="Schließen">×</button>
+      </div>
+      <div style="padding:0 20px 20px;">
+        <p class="hint" style="margin-bottom:16px;font-size:13px;line-height:1.6;">
+          Du wurdest zur Ollama-Login-Seite weitergeleitet. Nach dem Login kopiere deinen API Key und füge ihn hier ein.
+        </p>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="ollamaConnectKey" placeholder="oll-... API Key einfügen" />
+        </div>
+        <div class="btn-row" style="margin-bottom:12px;">
+          <button class="btn-secondary" id="ollamaReopenLoginBtn" style="flex:1;">Ollama Login öffnen</button>
+          <button class="btn-secondary" id="ollamaOpenKeysBtn" style="flex:1;">API Keys öffnen</button>
+        </div>
+        <div class="form-group">
+          <button class="btn-primary" id="ollamaConnectConfirmBtn" style="width:100%;">Verbinden</button>
+        </div>
+        <div class="hint" id="ollamaConnectStatus"></div>
+      </div>
+    </div>
   </div>
 
   <script src="main.js"></script>

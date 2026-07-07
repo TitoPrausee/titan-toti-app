@@ -1,4 +1,4 @@
-// Titan Toti v2 — Standalone Frontend
+// Titan Toti v2.2 — Standalone Frontend
 // Vanilla JS — KEINE Backticks, KEINE Frameworks
 
 (function() {
@@ -139,6 +139,212 @@
     return html;
   }
 
+  // --- MODELL-AUSWAHL MODAL ---
+  var modelModalContext = "setup"; // "setup" oder "settings"
+  var availableModels = [];
+
+  function openModelModal(context, models) {
+    modelModalContext = context || "setup";
+    availableModels = models || [];
+    var backdrop = $("modelModalBackdrop");
+    var modal = $("modelModal");
+    backdrop.style.display = "block";
+    modal.style.display = "flex";
+    // Animation: slide-down + fade-in
+    modal.classList.remove("modal-closing");
+    modal.classList.add("modal-opening");
+    // Search zuruecksetzen
+    $("modelSearchInput").value = "";
+    // Modelle rendern
+    renderModelList(availableModels, "");
+    // Focus auf Search
+    setTimeout(function() { $("modelSearchInput").focus(); }, 100);
+  }
+
+  function closeModelModal() {
+    var backdrop = $("modelModalBackdrop");
+    var modal = $("modelModal");
+    // Animation: slide-up + fade-out
+    modal.classList.remove("modal-opening");
+    modal.classList.add("modal-closing");
+    setTimeout(function() {
+      modal.style.display = "none";
+      backdrop.style.display = "none";
+      modal.classList.remove("modal-closing");
+    }, 300);
+  }
+
+  function renderModelList(models, filter) {
+    var container = $("modelListContainer");
+    var filtered = models;
+    if (filter) {
+      var f = filter.toLowerCase();
+      filtered = models.filter(function(m) {
+        return m.toLowerCase().indexOf(f) >= 0;
+      });
+    }
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="empty-state"><p>Keine Modelle gefunden.</p></div>';
+      return;
+    }
+    container.innerHTML = "";
+    filtered.forEach(function(m) {
+      var card = document.createElement("div");
+      card.className = "model-card";
+      card.setAttribute("data-model", m);
+      card.innerHTML = '<div class="model-card-name">' + escapeHtml(m) + '</div>';
+      card.addEventListener("click", function() {
+        selectModelFromModal(m);
+      });
+      container.appendChild(card);
+    });
+  }
+
+  function selectModelFromModal(modelName) {
+    if (modelModalContext === "setup") {
+      $("setupModelInput").value = modelName;
+      $("setupModelDisplay").value = modelName;
+      $("setupModelStatus").textContent = "Modell: " + modelName + " ausgewählt";
+      $("setupModelStatus").className = "hint success";
+    } else {
+      // Settings
+      $("modelDisplay").value = modelName;
+      // Internen select fuer saveSettings aktualisieren (falls vorhanden)
+      settings.model = modelName;
+      setSetting(STORAGE_KEYS.model, modelName);
+      $("settingsModelStatus").textContent = "Modell: " + modelName + " ausgewählt";
+      $("settingsModelStatus").className = "hint success";
+    }
+    closeModelModal();
+  }
+
+  function setupModelModalEvents() {
+    // Schliessen-Button
+    $("modelModalClose").addEventListener("click", closeModelModal);
+    // Backdrop Klick schliesst
+    $("modelModalBackdrop").addEventListener("click", closeModelModal);
+    // Search
+    $("modelSearchInput").addEventListener("input", function() {
+      renderModelList(availableModels, this.value);
+    });
+    // ESC schliesst Modal (globale Listener weiter unten)
+  }
+
+  // --- OLLAMA CONNECT MODAL ---
+  var ollamaConnectContext = "setup"; // "setup" oder "settings"
+
+  function openOllamaConnectModal(context) {
+    ollamaConnectContext = context || "setup";
+    var backdrop = $("ollamaConnectBackdrop");
+    var modal = $("ollamaConnectModal");
+    backdrop.style.display = "block";
+    modal.style.display = "flex";
+    modal.classList.remove("modal-closing");
+    modal.classList.add("modal-opening");
+    // Browser oeffnen
+    callBackend("open_ollama_login", {}).then(function() {
+      $("ollamaConnectStatus").textContent = "Browser geöffnet. Bitte logge dich ein und kopiere deinen API Key.";
+      $("ollamaConnectStatus").className = "hint";
+    }).catch(function(err) {
+      $("ollamaConnectStatus").textContent = "Browser konnte nicht geöffnet werden: " + err;
+      $("ollamaConnectStatus").className = "hint error";
+    });
+    // Key zuruecksetzen
+    $("ollamaConnectKey").value = "";
+    setTimeout(function() { $("ollamaConnectKey").focus(); }, 100);
+  }
+
+  function closeOllamaConnectModal() {
+    var backdrop = $("ollamaConnectBackdrop");
+    var modal = $("ollamaConnectModal");
+    modal.classList.remove("modal-opening");
+    modal.classList.add("modal-closing");
+    setTimeout(function() {
+      modal.style.display = "none";
+      backdrop.style.display = "none";
+      modal.classList.remove("modal-closing");
+    }, 300);
+  }
+
+  function setupOllamaConnectEvents() {
+    $("ollamaConnectClose").addEventListener("click", closeOllamaConnectModal);
+    $("ollamaConnectBackdrop").addEventListener("click", closeOllamaConnectModal);
+    $("ollamaReopenLoginBtn").addEventListener("click", function() {
+      callBackend("open_ollama_login", {}).catch(function() {});
+    });
+    $("ollamaOpenKeysBtn").addEventListener("click", function() {
+      callBackend("open_ollama_keys", {}).catch(function() {});
+    });
+    $("ollamaConnectConfirmBtn").addEventListener("click", function() {
+      var key = $("ollamaConnectKey").value.trim();
+      if (!key) {
+        $("ollamaConnectStatus").textContent = "Bitte API Key eingeben.";
+        $("ollamaConnectStatus").className = "hint error";
+        return;
+      }
+      $("ollamaConnectStatus").textContent = "Teste Verbindung...";
+      $("ollamaConnectStatus").className = "hint";
+      var apiUrl = "https://api.ollama.ai";
+      if (ollamaConnectContext === "setup") {
+        apiUrl = $("setupApiUrl").value.trim() || "https://api.ollama.ai";
+      } else {
+        apiUrl = $("apiUrlInput").value.trim() || "https://api.ollama.ai";
+      }
+      callBackend("ollama_health", { apiUrl: apiUrl }).then(function(ok) {
+        if (ok) {
+          // Key speichern
+          if (ollamaConnectContext === "setup") {
+            $("setupApiUrl").value = apiUrl;
+            $("setupApiKey").value = key;
+            $("setupApiKeyGroup").style.display = "block";
+            $("ollamaConnectStatus").textContent = "Verbunden! API Key gespeichert.";
+            $("ollamaConnectStatus").className = "hint success";
+          } else {
+            $("apiUrlInput").value = apiUrl;
+            $("apiKeyInput").value = key;
+            $("ollamaLoginStatus").textContent = "Verbunden mit Ollama Cloud!";
+            $("ollamaLoginStatus").className = "hint success";
+            saveSettings();
+          }
+          setTimeout(closeOllamaConnectModal, 1000);
+        } else {
+          // Key trotzdem speichern (Server vielleicht erst nach Key verfuegbar)
+          if (ollamaConnectContext === "setup") {
+            $("setupApiUrl").value = apiUrl;
+            $("setupApiKey").value = key;
+            $("setupApiKeyGroup").style.display = "block";
+          } else {
+            $("apiUrlInput").value = apiUrl;
+            $("apiKeyInput").value = key;
+            saveSettings();
+          }
+          $("ollamaConnectStatus").textContent = "API Key gespeichert. Server nicht direkt erreichbar — wird beim Chat getestet.";
+          $("ollamaConnectStatus").className = "hint";
+          setTimeout(closeOllamaConnectModal, 1500);
+        }
+      }).catch(function(err) {
+        $("ollamaConnectStatus").textContent = "Fehler: " + err;
+        $("ollamaConnectStatus").className = "hint error";
+      });
+    });
+  }
+
+  // Globale ESC-Listener fuer alle Modals
+  function setupGlobalEscListener() {
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape") {
+        var modelModal = $("modelModal");
+        var ollamaModal = $("ollamaConnectModal");
+        if (modelModal.style.display !== "none") {
+          closeModelModal();
+        }
+        if (ollamaModal.style.display !== "none") {
+          closeOllamaConnectModal();
+        }
+      }
+    });
+  }
+
   // --- SETUP SCREEN ---
   function initSetup() {
     var setupDone = getSettingBool(STORAGE_KEYS.setupDone, false);
@@ -152,7 +358,7 @@
     setupScreen.style.display = "flex";
     mainApp.style.display = "none";
 
-    $$("[data-mode]").forEach(function(btn) {
+    $$("#setupScreen [data-mode]").forEach(function(btn) {
       btn.addEventListener("click", function() {
         var mode = btn.getAttribute("data-mode");
         var config = $("setupConfig");
@@ -163,25 +369,35 @@
         if (mode === "local") {
           urlInput.value = "http://localhost:11434";
           keyGroup.style.display = "none";
+          loadSetupModels(urlInput.value, "");
         } else if (mode === "cloud") {
           urlInput.value = "https://api.ollama.ai";
-          keyGroup.style.display = "block";
+          keyGroup.style.display = "none";
+          // Ollama Connect Modal oeffnen
+          openOllamaConnectModal("setup");
+          loadSetupModels(urlInput.value, $("setupApiKey").value);
         } else {
           urlInput.value = "http://localhost:11434";
           keyGroup.style.display = "block";
+          loadSetupModels(urlInput.value, $("setupApiKey").value);
         }
-        loadSetupModels(urlInput.value, $("setupApiKey").value);
       });
     });
 
-    $("refreshModelsBtn").addEventListener("click", function() {
-      loadSetupModels($("setupApiUrl").value, $("setupApiKey").value);
+    $("setupModelChooseBtn").addEventListener("click", function() {
+      var url = $("setupApiUrl").value.trim();
+      var key = $("setupApiKey").value.trim();
+      loadSetupModels(url, key);
+    });
+
+    $("setupModelDisplay").addEventListener("click", function() {
+      $("setupModelChooseBtn").click();
     });
 
     $("setupConnectBtn").addEventListener("click", function() {
       var url = $("setupApiUrl").value.trim();
       var key = $("setupApiKey").value.trim();
-      var model = $("setupModelInput").value.trim() || $("setupModelSelect").value;
+      var model = $("setupModelInput").value.trim() || $("setupModelDisplay").value.trim();
       if (!url) {
         $("setupStatus").textContent = "Bitte API URL eingeben.";
         $("setupStatus").className = "hint error";
@@ -215,7 +431,7 @@
     $("setupOfflineBtn").addEventListener("click", function() {
       settings.apiUrl = $("setupApiUrl").value.trim() || defaults.apiUrl;
       settings.apiKey = $("setupApiKey").value.trim();
-      settings.model = $("setupModelInput").value.trim() || $("setupModelSelect").value || defaults.model;
+      settings.model = $("setupModelInput").value.trim() || $("setupModelDisplay").value.trim() || defaults.model;
       setSetting(STORAGE_KEYS.apiUrl, settings.apiUrl);
       setSetting(STORAGE_KEYS.apiKey, settings.apiKey);
       setSetting(STORAGE_KEYS.model, settings.model);
@@ -225,22 +441,17 @@
   }
 
   function loadSetupModels(url, key) {
-    var select = $("setupModelSelect");
-    select.innerHTML = '<option value="">Modelle werden geladen...</option>';
+    // Lade Modelle und oeffne Modal
     callBackend("ollama_list_models", { apiUrl: url, apiKey: key }).then(function(models) {
       if (models && models.length > 0) {
-        select.innerHTML = "";
-        models.forEach(function(m) {
-          var opt = document.createElement("option");
-          opt.value = m;
-          opt.textContent = m;
-          select.appendChild(opt);
-        });
+        openModelModal("setup", models);
       } else {
-        select.innerHTML = '<option value="">Keine Modelle gefunden</option>';
+        $("setupModelStatus").textContent = "Keine Modelle gefunden. Bitte manuell eingeben.";
+        $("setupModelStatus").className = "hint";
       }
     }).catch(function() {
-      select.innerHTML = '<option value="">Keine Modelle geladen (manuell eingeben)</option>';
+      $("setupModelStatus").textContent = "Modelle konnten nicht geladen werden. Bitte manuell eingeben.";
+      $("setupModelStatus").className = "hint";
     });
   }
 
@@ -284,6 +495,9 @@
     setupMemory();
     setupSettings();
     setupResponsive();
+    setupModelModalEvents();
+    setupOllamaConnectEvents();
+    setupGlobalEscListener();
   }
 
   // --- RESPONSIVE / HAMBURGER MENU ---
@@ -934,7 +1148,7 @@
     filtered.forEach(function(s) {
       var card = document.createElement("div");
       card.className = "skill-card";
-      var sysBadge = s.requires_system ? '<span class="skill-badge-sys">System</span>' : '';
+      var sysBadge = s.requires_system ? '<span class="skill-badge-sys">System</span>' : "";
       card.innerHTML = '<div class="skill-name">' + escapeHtml(s.name) + sysBadge + '</div><div class="skill-desc">' + escapeHtml(s.description) + '</div><span class="skill-category">' + escapeHtml(s.category) + '</span>';
       grid.appendChild(card);
     });
@@ -944,14 +1158,7 @@
   function initSettings() {
     $("apiUrlInput").value = settings.apiUrl;
     $("apiKeyInput").value = settings.apiKey;
-    $("modelSelect").value = settings.model;
-    if (!$("modelSelect").value) {
-      var opt = document.createElement("option");
-      opt.value = settings.model;
-      opt.textContent = settings.model;
-      $("modelSelect").appendChild(opt);
-      $("modelSelect").value = settings.model;
-    }
+    $("modelDisplay").value = settings.model;
     $("fallbackModelsInput").value = settings.fallbackModels;
     $("tempSlider").value = settings.temperature;
     $("tempValue").textContent = settings.temperature;
@@ -967,7 +1174,9 @@
   function saveSettings() {
     setSetting(STORAGE_KEYS.apiUrl, $("apiUrlInput").value || defaults.apiUrl);
     setSetting(STORAGE_KEYS.apiKey, $("apiKeyInput").value);
-    setSetting(STORAGE_KEYS.model, $("modelSelect").value || defaults.model);
+    // modelDisplay statt modelSelect
+    var modelVal = $("modelDisplay").value.trim() || settings.model;
+    setSetting(STORAGE_KEYS.model, modelVal);
     setSetting(STORAGE_KEYS.fallbackModels, $("fallbackModelsInput").value);
     setSetting(STORAGE_KEYS.temperature, $("tempSlider").value);
     setSetting(STORAGE_KEYS.maxTokens, $("tokensSlider").value);
@@ -1007,7 +1216,6 @@
     });
     $("apiUrlInput").addEventListener("change", saveSettings);
     $("apiKeyInput").addEventListener("change", saveSettings);
-    $("modelSelect").addEventListener("change", saveSettings);
     $("fallbackModelsInput").addEventListener("change", saveSettings);
     $("tempSlider").addEventListener("input", function() { $("tempValue").textContent = this.value; saveSettings(); });
     $("tokensSlider").addEventListener("input", function() { $("tokensValue").textContent = this.value; saveSettings(); });
@@ -1016,8 +1224,29 @@
     $("skillsToggle").addEventListener("change", saveSettings);
     $("themeToggle").addEventListener("change", saveSettings);
 
-    $("refreshModelsSettingsBtn").addEventListener("click", function() {
-      loadModelsForSettings();
+    // Modell-Auswahl Modal in Settings
+    $("settingsModelChooseBtn").addEventListener("click", function() {
+      var url = $("apiUrlInput").value.trim();
+      var key = $("apiKeyInput").value.trim();
+      callBackend("ollama_list_models", { apiUrl: url, apiKey: key }).then(function(models) {
+        if (models && models.length > 0) {
+          openModelModal("settings", models);
+        } else {
+          $("settingsModelStatus").textContent = "Keine Modelle gefunden.";
+          $("settingsModelStatus").className = "hint";
+        }
+      }).catch(function() {
+        $("settingsModelStatus").textContent = "Modelle konnten nicht geladen werden.";
+        $("settingsModelStatus").className = "hint";
+      });
+    });
+    $("modelDisplay").addEventListener("click", function() {
+      $("settingsModelChooseBtn").click();
+    });
+
+    // Ollama Connect in Settings
+    $("openOllamaLoginBtn").addEventListener("click", function() {
+      openOllamaConnectModal("settings");
     });
 
     $("testConnBtn").addEventListener("click", function() {
@@ -1046,42 +1275,6 @@
     $("deleteDataBtn").addEventListener("click", deleteData);
   }
 
-  function loadModelsForSettings() {
-    var select = $("modelSelect");
-    var currentVal = select.value;
-    select.innerHTML = '<option value="">Lade...</option>';
-    callBackend("ollama_list_models", {
-      apiUrl: $("apiUrlInput").value,
-      apiKey: $("apiKeyInput").value
-    }).then(function(models) {
-      select.innerHTML = "";
-      if (models && models.length > 0) {
-        models.forEach(function(m) {
-          var opt = document.createElement("option");
-          opt.value = m;
-          opt.textContent = m;
-          select.appendChild(opt);
-        });
-        // aktuellen Wert erhalten
-        var found = false;
-        for (var i = 0; i < select.options.length; i++) {
-          if (select.options[i].value === currentVal) { select.value = currentVal; found = true; break; }
-        }
-        if (!found && currentVal) {
-          var opt = document.createElement("option");
-          opt.value = currentVal;
-          opt.textContent = currentVal + " (nicht gefunden)";
-          select.appendChild(opt);
-          select.value = currentVal;
-        }
-      } else {
-        select.innerHTML = '<option value="' + escapeHtml(currentVal) + '">' + escapeHtml(currentVal) + '</option>';
-      }
-    }).catch(function() {
-      select.innerHTML = '<option value="' + escapeHtml(currentVal) + '">' + escapeHtml(currentVal) + '</option>';
-    });
-  }
-
   function loadSkillsForSearch(filter) {
     callBackend("skills_list", {}).then(function(result) {
       try {
@@ -1095,7 +1288,7 @@
     callBackend("memory_get_sessions", {}).then(function(sessionsResult) {
       var exportObj = {
         app: "Titan Toti",
-        version: "2.0.0",
+        version: "2.2.0",
         export_date: new Date().toISOString(),
         settings: {
           apiUrl: settings.apiUrl,
