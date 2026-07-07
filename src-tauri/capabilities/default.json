@@ -1,10 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Standard-Berechtigungen fuer Titan Toti",
+  "description": "Standard-Berechtigungen fuer Titan Toti Standalone",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "shell:default",
+    "shell:allow-execute",
+    "fs:default",
+    "fs:allow-read",
+    "fs:allow-write",
+    "dialog:default"
   ]
 }

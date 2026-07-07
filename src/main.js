@@ -1,141 +1,96 @@
-// Titan Toti — Frontend Logik
+// Titan Toti v2 — Standalone Frontend
 // Vanilla JS — KEINE Backticks, KEINE Frameworks
 
 (function() {
   "use strict";
 
-  // --- STORAGE ---
+  // --- STORAGE KEYS ---
   var STORAGE_KEYS = {
-    serverUrl: "titantoti_server_url",
-    inviteToken: "titantoti_invite_token",
-    inviteCode: "titantoti_invite_code",
-    inviteLabel: "titantoti_invite_label",
+    apiUrl: "titantoti_api_url",
+    apiKey: "titantoti_api_key",
     model: "titantoti_model",
+    fallbackModels: "titantoti_fallback_models",
     temperature: "titantoti_temperature",
     maxTokens: "titantoti_max_tokens",
+    systemPrompt: "titantoti_system_prompt",
+    systemAccess: "titantoti_system_access",
+    skillsEnabled: "titantoti_skills_enabled",
     theme: "titantoti_theme",
-    chatHistory: "titantoti_chat_history",
-    sessions: "titantoti_sessions",
-    currentSession: "titantoti_current_session"
+    currentSession: "titantoti_current_session",
+    setupDone: "titantoti_setup_done"
   };
 
-  // Default-Einstellungen
   var defaults = {
-    serverUrl: "http://localhost:8460",
-    model: "glm-5.2:cloud",
+    apiUrl: "http://localhost:11434",
+    apiKey: "",
+    model: "llama3.2",
+    fallbackModels: "",
     temperature: 0.7,
     maxTokens: 8192,
+    systemPrompt: "",
+    systemAccess: true,
+    skillsEnabled: true,
     theme: "dark"
   };
 
-  // Settings laden
+  var DEFAULT_SYSTEM_PROMPT_FALLBACK = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
+
   function getSetting(key, fallback) {
     var val = localStorage.getItem(key);
     if (val === null || val === undefined || val === "") return fallback;
     return val;
   }
-
+  function getSettingBool(key, fallback) {
+    var val = localStorage.getItem(key);
+    if (val === null || val === undefined) return fallback;
+    return val === "true" || val === "1";
+  }
   function getSettingNum(key, fallback) {
     var val = localStorage.getItem(key);
     if (val === null || val === undefined || val === "") return fallback;
     var num = parseFloat(val);
     return isNaN(num) ? fallback : num;
   }
-
-  function setSetting(key, val) {
-    localStorage.setItem(key, val);
-  }
+  function setSetting(key, val) { localStorage.setItem(key, val); }
 
   // Aktuelle Settings
   var settings = {
-    serverUrl: getSetting(STORAGE_KEYS.serverUrl, defaults.serverUrl),
-    inviteToken: getSetting(STORAGE_KEYS.inviteToken, ""),
-    inviteCode: getSetting(STORAGE_KEYS.inviteCode, ""),
-    inviteLabel: getSetting(STORAGE_KEYS.inviteLabel, ""),
+    apiUrl: getSetting(STORAGE_KEYS.apiUrl, defaults.apiUrl),
+    apiKey: getSetting(STORAGE_KEYS.apiKey, defaults.apiKey),
     model: getSetting(STORAGE_KEYS.model, defaults.model),
+    fallbackModels: getSetting(STORAGE_KEYS.fallbackModels, defaults.fallbackModels),
     temperature: getSettingNum(STORAGE_KEYS.temperature, defaults.temperature),
     maxTokens: getSettingNum(STORAGE_KEYS.maxTokens, defaults.maxTokens),
+    systemPrompt: getSetting(STORAGE_KEYS.systemPrompt, ""),
+    systemAccess: getSettingBool(STORAGE_KEYS.systemAccess, defaults.systemAccess),
+    skillsEnabled: getSettingBool(STORAGE_KEYS.skillsEnabled, defaults.skillsEnabled),
     theme: getSetting(STORAGE_KEYS.theme, defaults.theme),
     currentSession: getSetting(STORAGE_KEYS.currentSession, "")
   };
 
-  // Chat-Historie laden (alle Sessions)
+  // In-memory Chat-Historie (pro Session)
   var chatHistory = {};
-  try {
-    var raw = localStorage.getItem(STORAGE_KEYS.chatHistory);
-    if (raw) chatHistory = JSON.parse(raw);
-  } catch (e) {
-    chatHistory = {};
-  }
-
-  var sessions = [];
-  try {
-    var rawSessions = localStorage.getItem(STORAGE_KEYS.sessions);
-    if (rawSessions) sessions = JSON.parse(rawSessions);
-  } catch (e) {
-    sessions = [];
-  }
 
   // --- TAUURI BRIDGE ---
   var invoke = null;
   if (typeof window.__TAURI__ !== "undefined" && window.__TAURI__.core) {
     invoke = window.__TAURI__.core.invoke;
-  } else if (typeof window.__TAURI_INVOKE__ === "function") {
-    invoke = window.__TAURI_INVOKE__;
   }
 
-  // Fallback fuer Dev (ohne Tauri): direkter fetch
   function callBackend(cmd, args) {
     if (invoke) {
       return invoke(cmd, args);
     }
-    // Dev-Modus ohne Tauri: direkter HTTP-Call
-    return devFallback(cmd, args);
+    return Promise.reject("Tauri nicht verfuegbar");
   }
 
-  function devFallback(cmd, args) {
-    return new Promise(function(resolve, reject) {
-      var serverUrl = settings.serverUrl;
-      var url = serverUrl.replace(/\/$/, "");
-      if (cmd === "health_check") {
-        fetch(url + "/health").then(function(r){resolve(r.ok);}).catch(function(){resolve(false);});
-      } else if (cmd === "health_status") {
-        fetch(url + "/health").then(function(r){return r.text();}).then(function(t){resolve(t);}).catch(function(e){reject(e.toString());});
-      } else if (cmd === "invite") {
-        fetch(url + "/api/invite", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:args.code})})
-          .then(function(r){return r.text();}).then(function(t){resolve(t);}).catch(function(e){reject(e.toString());});
-      } else if (cmd === "chat_send") {
-        fetch(url + "/api/chat", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:args.message, session_id:args.session_id, invite_token:args.invite_token, user_name:args.user_name})})
-          .then(function(r){return r.text();}).then(function(t){resolve(t);}).catch(function(e){reject(e.toString());});
-      } else if (cmd === "logout") {
-        fetch(url + "/api/logout", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({invite_token:args.invite_token})})
-          .then(function(r){resolve(r.ok);}).catch(function(){resolve(false);});
-      } else if (cmd === "export_data") {
-        fetch(url + "/api/export-data", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({invite_token:args.invite_token})})
-          .then(function(r){return r.text();}).then(function(t){resolve(t);}).catch(function(e){reject(e.toString());});
-      } else if (cmd === "delete_data") {
-        fetch(url + "/api/delete-data", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({invite_token:args.invite_token})})
-          .then(function(r){resolve(r.ok);}).catch(function(){resolve(false);});
-      } else if (cmd === "get_memory" || cmd === "get_skills" || cmd === "privacy_settings") {
-        var endpoint = cmd === "get_memory" ? "/api/memory" : (cmd === "get_skills" ? "/api/skills" : "/api/privacy-settings");
-        fetch(url + endpoint).then(function(r){return r.text();}).then(function(t){resolve(t);}).catch(function(e){reject(e.toString());});
-      } else if (cmd === "app_version") {
-        resolve("1.0.0");
-      } else {
-        reject("Unknown command: " + cmd);
-      }
-    });
-  }
-
-  // --- DOM ELEMENTS ---
-  var el = {};
+  // --- DOM HELPERS ---
   function $(id) { return document.getElementById(id); }
   function $$(sel) { return document.querySelectorAll(sel); }
 
-  // --- HELPER ---
   function escapeHtml(str) {
     var div = document.createElement("div");
-    div.textContent = str;
+    div.textContent = str == null ? "" : String(str);
     return div.innerHTML;
   }
 
@@ -153,7 +108,6 @@
   // --- MARKDOWN RENDERING ---
   function renderMarkdown(text) {
     var html = escapeHtml(text);
-    // Code-Blocks (triple backtick)
     var codeBlocks = [];
     var codeRegex = /```(\w*)\n([\s\S]*?)```/g;
     html = html.replace(codeRegex, function(match, lang, code) {
@@ -162,38 +116,184 @@
       codeBlocks.push({lang: langLabel, code: code});
       return "@@CODEBLOCK_" + idx + "@@";
     });
-    // Inline code
     html = html.replace(/`([^`]+)`/g, function(m, c) {
       return "<code>" + escapeHtml(c) + "</code>";
     });
-    // Bold
     html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    // Italic
     html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    // Links
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    // Autolinks
     html = html.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-    // Listen (unordered)
     html = html.replace(/^[\*\-]\s+(.+)$/gm, "<li>$1</li>");
     html = html.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
-    // Absaetze
     var parts = html.split(/\n\n+/);
     html = parts.map(function(p) {
       if (p.indexOf("<ul>") === 0 || p.indexOf("<ol>") === 0) return p;
       if (p.indexOf("@@CODEBLOCK_") >= 0) return p;
       return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
     }).join("\n");
-    // Code-Blocks wieder einfuegen
     html = html.replace(/@@CODEBLOCK_(\d+)@@/g, function(match, idx) {
       var block = codeBlocks[parseInt(idx, 10)];
       if (!block) return match;
-      return '<div class="code-block"><div class="code-block-header"><span>' + block.lang + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button></div><pre>' + escapeHtml(block.code) + '</pre></div>';
+      return '<div class="code-block"><div class="code-block-header"><span>' + escapeHtml(block.lang) + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button></div><pre>' + escapeHtml(block.code) + '</pre></div>';
     });
     return html;
   }
 
+  // --- SETUP SCREEN ---
+  function initSetup() {
+    var setupDone = getSettingBool(STORAGE_KEYS.setupDone, false);
+    if (setupDone && settings.apiUrl) {
+      showMainApp();
+      return;
+    }
+
+    var setupScreen = $("setupScreen");
+    var mainApp = $("mainApp");
+    setupScreen.style.display = "flex";
+    mainApp.style.display = "none";
+
+    $$("[data-mode]").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var mode = btn.getAttribute("data-mode");
+        var config = $("setupConfig");
+        var urlInput = $("setupApiUrl");
+        var keyGroup = $("setupApiKeyGroup");
+
+        config.style.display = "block";
+        if (mode === "local") {
+          urlInput.value = "http://localhost:11434";
+          keyGroup.style.display = "none";
+        } else if (mode === "cloud") {
+          urlInput.value = "https://api.ollama.ai";
+          keyGroup.style.display = "block";
+        } else {
+          urlInput.value = "http://localhost:11434";
+          keyGroup.style.display = "block";
+        }
+        loadSetupModels(urlInput.value, $("setupApiKey").value);
+      });
+    });
+
+    $("refreshModelsBtn").addEventListener("click", function() {
+      loadSetupModels($("setupApiUrl").value, $("setupApiKey").value);
+    });
+
+    $("setupConnectBtn").addEventListener("click", function() {
+      var url = $("setupApiUrl").value.trim();
+      var key = $("setupApiKey").value.trim();
+      var model = $("setupModelInput").value.trim() || $("setupModelSelect").value;
+      if (!url) {
+        $("setupStatus").textContent = "Bitte API URL eingeben.";
+        $("setupStatus").className = "hint error";
+        return;
+      }
+      $("setupStatus").textContent = "Teste Verbindung...";
+      $("setupStatus").className = "hint";
+
+      callBackend("ollama_health", { apiUrl: url }).then(function(ok) {
+        if (ok) {
+          settings.apiUrl = url;
+          settings.apiKey = key;
+          settings.model = model || "llama3.2";
+          setSetting(STORAGE_KEYS.apiUrl, url);
+          setSetting(STORAGE_KEYS.apiKey, key);
+          setSetting(STORAGE_KEYS.model, settings.model);
+          setSetting(STORAGE_KEYS.setupDone, "true");
+          $("setupStatus").textContent = "Verbunden! Starte App...";
+          $("setupStatus").className = "hint success";
+          setTimeout(showMainApp, 800);
+        } else {
+          $("setupStatus").textContent = "Keine Verbindung zu Ollama unter " + url + ". Pruefe ob Ollama laeuft.";
+          $("setupStatus").className = "hint error";
+        }
+      }).catch(function(err) {
+        $("setupStatus").textContent = "Fehler: " + err;
+        $("setupStatus").className = "hint error";
+      });
+    });
+
+    $("setupOfflineBtn").addEventListener("click", function() {
+      settings.apiUrl = $("setupApiUrl").value.trim() || defaults.apiUrl;
+      settings.apiKey = $("setupApiKey").value.trim();
+      settings.model = $("setupModelInput").value.trim() || $("setupModelSelect").value || defaults.model;
+      setSetting(STORAGE_KEYS.apiUrl, settings.apiUrl);
+      setSetting(STORAGE_KEYS.apiKey, settings.apiKey);
+      setSetting(STORAGE_KEYS.model, settings.model);
+      setSetting(STORAGE_KEYS.setupDone, "true");
+      showMainApp();
+    });
+  }
+
+  function loadSetupModels(url, key) {
+    var select = $("setupModelSelect");
+    select.innerHTML = '<option value="">Modelle werden geladen...</option>';
+    callBackend("ollama_list_models", { apiUrl: url, apiKey: key }).then(function(models) {
+      if (models && models.length > 0) {
+        select.innerHTML = "";
+        models.forEach(function(m) {
+          var opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          select.appendChild(opt);
+        });
+      } else {
+        select.innerHTML = '<option value="">Keine Modelle gefunden</option>';
+      }
+    }).catch(function() {
+      select.innerHTML = '<option value="">Keine Modelle geladen (manuell eingeben)</option>';
+    });
+  }
+
+  function showMainApp() {
+    $("setupScreen").style.display = "none";
+    $("mainApp").style.display = "flex";
+    initMain();
+  }
+
+  // --- MAIN APP INIT ---
+  function initMain() {
+    applyTheme();
+    initSettings();
+    callBackend("app_version", {}).then(function(v) {
+      $("appVersion").textContent = "v" + v;
+    }).catch(function() {});
+
+    // Memory-Pfad anzeigen
+    callBackend("memory_path", {}).then(function(p) {
+      $("memoryPathDisplay").textContent = p;
+    }).catch(function() {});
+
+    // Default-System-Prompt laden falls noch keiner gesetzt
+    if (!settings.systemPrompt) {
+      callBackend("default_system_prompt", {}).then(function(p) {
+        settings.systemPrompt = p;
+        setSetting(STORAGE_KEYS.systemPrompt, p);
+        $("systemPromptInput").value = p;
+      }).catch(function() {
+        settings.systemPrompt = DEFAULT_SYSTEM_PROMPT_FALLBACK;
+        $("systemPromptInput").value = DEFAULT_SYSTEM_PROMPT_FALLBACK;
+      });
+    }
+
+    updateSessionSelect();
+    loadChatFromMemory();
+    startStatusTimer();
+
+    setupNavigation();
+    setupChat();
+    setupMemory();
+    setupSettings();
+  }
+
   // --- NAVIGATION ---
+  function setupNavigation() {
+    $$(".nav-item").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        switchView(btn.getAttribute("data-view"));
+      });
+    });
+  }
+
   function switchView(view) {
     $$(".view").forEach(function(v) { v.classList.remove("active"); });
     $$(".nav-item").forEach(function(n) { n.classList.remove("active"); });
@@ -209,58 +309,107 @@
   function checkStatus() {
     var dot = $("statusDot");
     var text = $("statusText");
-    if (dot) {
-      dot.className = "status-dot checking";
-      text.textContent = "Pruefe Status...";
-    }
-    callBackend("health_check", { serverUrl: settings.serverUrl }).then(function(ok) {
+    if (dot) { dot.className = "status-dot checking"; text.textContent = "Pruefe..."; }
+    callBackend("ollama_health", { apiUrl: settings.apiUrl }).then(function(ok) {
       if (dot) {
         dot.className = "status-dot " + (ok ? "online" : "offline");
         text.textContent = ok ? "Online" : "Offline";
       }
     }).catch(function() {
-      if (dot) {
-        dot.className = "status-dot offline";
-        text.textContent = "Offline";
-      }
+      if (dot) { dot.className = "status-dot offline"; text.textContent = "Offline"; }
     });
   }
-
   function startStatusTimer() {
     checkStatus();
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = setInterval(checkStatus, 30000);
   }
 
-  // --- CHAT ---
+  // --- SESSIONS & CHAT ---
+  function loadChatFromMemory() {
+    // Wenn keine current session, erstelle eine
+    if (!settings.currentSession) {
+      callBackend("memory_create_session", { name: "" }).then(function(sid) {
+        settings.currentSession = sid;
+        setSetting(STORAGE_KEYS.currentSession, sid);
+        loadSessionsList();
+      }).catch(function() {
+        // Fallback: lokale ID
+        settings.currentSession = generateId();
+        setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
+      });
+    } else {
+      loadSessionsList();
+      loadMessagesForSession(settings.currentSession);
+    }
+  }
+
+  function loadSessionsList() {
+    callBackend("memory_get_sessions", {}).then(function(result) {
+      try {
+        var sessions = JSON.parse(result);
+        updateSessionSelectWithData(sessions);
+      } catch (e) {}
+    }).catch(function() {});
+  }
+
+  function updateSessionSelectWithData(sessions) {
+    var select = $("sessionSelect");
+    select.innerHTML = '<option value="">Neue Sitzung</option>';
+    sessions.forEach(function(s) {
+      var opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = s.name + " (" + (s.message_count || 0) + ")";
+      if (s.id === settings.currentSession) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+
+  function updateSessionSelect() {
+    loadSessionsList();
+  }
+
+  function loadMessagesForSession(sid) {
+    callBackend("memory_get_messages", { sessionId: sid }).then(function(result) {
+      try {
+        var msgs = JSON.parse(result);
+        chatHistory[sid] = msgs.map(function(m) {
+          return { role: m.role, content: m.content, ts: m.timestamp * 1000 };
+        });
+        renderChatMessages();
+      } catch (e) {
+        chatHistory[sid] = [];
+        renderChatMessages();
+      }
+    }).catch(function() {
+      chatHistory[sid] = [];
+      renderChatMessages();
+    });
+  }
+
   function getSessionMessages() {
     var sid = settings.currentSession;
     if (!sid) return [];
     return chatHistory[sid] || [];
   }
 
-  function saveChatHistory() {
-    localStorage.setItem(STORAGE_KEYS.chatHistory, JSON.stringify(chatHistory));
-  }
-
   function renderChatMessages() {
     var container = $("chatMessages");
     var welcome = $("chatWelcome");
     var messages = getSessionMessages();
+    container.querySelectorAll(".message").forEach(function(m) { m.remove(); });
     if (messages.length === 0) {
       if (welcome) welcome.style.display = "flex";
-      container.querySelectorAll(".message").forEach(function(m) { m.remove(); });
       return;
     }
     if (welcome) welcome.style.display = "none";
-    container.querySelectorAll(".message").forEach(function(m) { m.remove(); });
     messages.forEach(function(msg) {
-      appendMessage(msg.role, msg.content, msg.ts, false);
+      appendMessage(msg.role, msg.content, msg.ts, false, msg.skill);
     });
     scrollToBottom();
   }
 
-  function appendMessage(role, content, ts, animate) {
+  function appendMessage(role, content, ts, animate, skillInfo) {
     var container = $("chatMessages");
     var welcome = $("chatWelcome");
     if (welcome) welcome.style.display = "none";
@@ -285,12 +434,24 @@
     body.className = "message-body";
     body.innerHTML = renderMarkdown(content);
     contentWrap.appendChild(header);
+
+    // Skill-Badge
+    if (skillInfo && skillInfo.skill_name) {
+      var badge = document.createElement("div");
+      badge.className = "skill-badge " + (skillInfo.success ? "success" : "error");
+      badge.innerHTML = '<span class="skill-badge-icon">⚡</span> Skill: ' + escapeHtml(skillInfo.skill_name) + (skillInfo.success ? " ausgefuehrt" : " fehlgeschlagen");
+      contentWrap.appendChild(badge);
+      var resultDiv = document.createElement("div");
+      resultDiv.className = "skill-result";
+      resultDiv.innerHTML = '<pre>' + escapeHtml(skillInfo.result) + '</pre>';
+      contentWrap.appendChild(resultDiv);
+    }
+
     contentWrap.appendChild(body);
     msg.appendChild(avatar);
     msg.appendChild(contentWrap);
     container.appendChild(msg);
     if (animate !== false) scrollToBottom();
-    // Copy-Buttons fuer Code-Blocks
     body.querySelectorAll(".copy-btn").forEach(function(btn) {
       btn.addEventListener("click", function() {
         var code = decodeURIComponent(btn.getAttribute("data-code"));
@@ -307,381 +468,254 @@
     container.scrollTop = container.scrollHeight;
   }
 
+  // Attached files
+  var attachedFiles = [];
+  function setupFileDrop() {
+    var input = $("chatInput");
+    var hint = $("fileDropHint");
+
+    document.addEventListener("dragover", function(e) {
+      e.preventDefault();
+      hint.style.display = "block";
+    });
+    document.addEventListener("dragleave", function(e) {
+      if (e.target === document) hint.style.display = "none";
+    });
+    document.addEventListener("drop", function(e) {
+      e.preventDefault();
+      hint.style.display = "none";
+      var files = e.dataTransfer.files;
+      for (var i = 0; i < files.length; i++) {
+        attachedFiles.push({ name: files[i].name, path: files[i].path });
+      }
+      renderAttachedFiles();
+    });
+  }
+
+  function renderAttachedFiles() {
+    var container = $("attachedFiles");
+    container.innerHTML = "";
+    attachedFiles.forEach(function(f, idx) {
+      var chip = document.createElement("div");
+      chip.className = "file-chip";
+      chip.innerHTML = '<span>📎 ' + escapeHtml(f.name) + '</span><button class="file-remove" data-idx="' + idx + '">×</button>';
+      container.appendChild(chip);
+    });
+    container.querySelectorAll(".file-remove").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        attachedFiles.splice(parseInt(btn.getAttribute("data-idx")), 1);
+        renderAttachedFiles();
+      });
+    });
+  }
+
   function sendMessage() {
     var input = $("chatInput");
     var text = input.value.trim();
     if (!text) return;
-    if (!settings.inviteToken) {
-      alert("Bitte gib zuerst in den Einstellungen deinen Invite-Code ein und verbinde dich.");
-      switchView("settings");
+
+    // Slash-Befehle
+    if (text.charAt(0) === "/") {
+      handleSlashCommand(text);
+      input.value = "";
+      input.style.height = "auto";
       return;
     }
-    // Session erstellen falls keine
+
     if (!settings.currentSession) {
       settings.currentSession = generateId();
       setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
-      sessions.push({id: settings.currentSession, name: "Sitzung " + (sessions.length + 1), created: Date.now()});
-      saveSessions();
-      updateSessionSelect();
     }
-    // Nachricht zum Verlauf hinzufuegen
+
+    // Attached files als Context
+    var fileContext = "";
+    var filesToProcess = attachedFiles.slice();
+    if (filesToProcess.length > 0) {
+      fileContext = "\n\n[Angehängte Dateien:\n";
+      filesToProcess.forEach(function(f) {
+        fileContext += "- " + f.name + " (" + f.path + ")\n";
+      });
+      fileContext += "]";
+    }
+
     var ts = Date.now();
-    if (!chatHistory[settings.currentSession]) chatHistory[settings.currentSession] = [];
-    chatHistory[settings.currentSession].push({role: "user", content: text, ts: ts});
-    saveChatHistory();
-    appendMessage("user", text, ts, true);
+    var userMsg = text + fileContext;
+    appendMessage("user", text + (fileContext ? "\n\n📎 " + filesToProcess.length + " Datei(en) angehängt" : ""), ts, true);
+
+    // Memory: User-Nachricht speichern
+    callBackend("memory_add_message", {
+      sessionId: settings.currentSession,
+      role: "user",
+      content: userMsg
+    }).catch(function() {});
+
     input.value = "";
     input.style.height = "auto";
-    // Typing-Indicator
+    attachedFiles = [];
+    renderAttachedFiles();
+
     $("typingIndicator").style.display = "flex";
     scrollToBottom();
-    // An Backend senden
-    callBackend("chat_send", {
-      message: text,
-      session_id: settings.currentSession,
-      invite_token: settings.inviteToken,
-      user_name: "Tito",
-      server_url: settings.serverUrl
-    }).then(function(result) {
-      $("typingIndicator").style.display = "none";
-      try {
-        var data = JSON.parse(result);
-        var responseText = data.response || "Keine Antwort erhalten.";
-        chatHistory[settings.currentSession].push({role: "assistant", content: responseText, ts: Date.now()});
-        saveChatHistory();
-        appendMessage("assistant", responseText, Date.now(), true);
-      } catch (e) {
-        appendMessage("assistant", "Fehler beim Verarbeiten der Antwort.", Date.now(), true);
+
+    // Skill-Matching
+    var skillPromise = Promise.resolve(null);
+    if (settings.skillsEnabled) {
+      skillPromise = callBackend("skills_match", {
+        message: text,
+        systemAccess: settings.systemAccess
+      }).then(function(resultStr) {
+        try {
+          var skillResult = JSON.parse(resultStr);
+          if (skillResult.matched) {
+            return skillResult;
+          }
+        } catch (e) {}
+        return null;
+      }).catch(function() { return null; });
+    }
+
+    skillPromise.then(function(skillResult) {
+      // Skill-Badge anzeigen
+      if (skillResult) {
+        appendMessage("assistant", "", Date.now(), true, skillResult);
       }
-    }).catch(function(err) {
-      $("typingIndicator").style.display = "none";
-      appendMessage("assistant", "Verbindungsfehler: " + err, Date.now(), true);
+
+      // LLM-Call
+      var messages = buildLLMMessages(text, skillResult, filesToProcess);
+      callBackend("ollama_chat", {
+        apiUrl: settings.apiUrl,
+        apiKey: settings.apiKey,
+        model: settings.model,
+        messages: messages,
+        temperature: settings.temperature,
+        maxTokens: Math.round(settings.maxTokens),
+        fallbackModels: parseFallbackModels(settings.fallbackModels)
+      }).then(function(response) {
+        $("typingIndicator").style.display = "none";
+        appendMessage("assistant", response, Date.now(), true);
+        // Memory: Antwort speichern
+        callBackend("memory_add_message", {
+          sessionId: settings.currentSession,
+          role: "assistant",
+          content: response
+        }).catch(function() {});
+      }).catch(function(err) {
+        $("typingIndicator").style.display = "none";
+        var errText = "Fehler: " + err;
+        if (skillResult) {
+          errText = "LLM nicht erreichbar. Skill wurde jedoch ausgefuehrt.\n\nFehler: " + err;
+        }
+        appendMessage("assistant", errText, Date.now(), true);
+        callBackend("memory_add_message", {
+          sessionId: settings.currentSession,
+          role: "assistant",
+          content: errText
+        }).catch(function() {});
+      });
     });
   }
 
-  // --- SESSIONS ---
-  function saveSessions() {
-    localStorage.setItem(STORAGE_KEYS.sessions, JSON.stringify(sessions));
+  function buildLLMMessages(userText, skillResult, files) {
+    var msgs = [];
+    // System-Prompt
+    var sysContent = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    msgs.push({ role: "system", content: sysContent });
+
+    // Vergangene Nachrichten der Session (max 20)
+    var sessionMsgs = getSessionMessages();
+    var recent = sessionMsgs.slice(-20);
+    recent.forEach(function(m) {
+      msgs.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
+    });
+
+    // Skill-Result als Context
+    if (skillResult && skillResult.matched) {
+      var contextText = "Skill '" + skillResult.skill_name + "' wurde ausgefuehrt. Ergebnis:\n" + skillResult.result;
+      msgs.push({ role: "system", content: contextText });
+    }
+
+    // Attached files
+    if (files && files.length > 0) {
+      var fileContext = "Der Nutzer hat folgende Dateien angehaengt:\n";
+      files.forEach(function(f) {
+        fileContext += "- " + f.name + " (Pfad: " + f.path + ")\n";
+      });
+      fileContext += "Du kannst auf diese Dateien zugreifen.";
+      msgs.push({ role: "system", content: fileContext });
+    }
+
+    // User-Nachricht
+    msgs.push({ role: "user", content: userText });
+
+    return msgs;
   }
 
-  function updateSessionSelect() {
-    var select = $("sessionSelect");
-    select.innerHTML = '<option value="">Neue Sitzung</option>';
-    sessions.forEach(function(s) {
-      var opt = document.createElement("option");
-      opt.value = s.id;
-      opt.textContent = s.name;
-      if (s.id === settings.currentSession) opt.selected = true;
-      select.appendChild(opt);
-    });
+  function parseFallbackModels(str) {
+    if (!str) return [];
+    return str.split(",").map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+  }
+
+  // --- SLASH COMMANDS ---
+  function handleSlashCommand(text) {
+    var cmd = text.toLowerCase().trim();
+    var parts = cmd.split(/\s+/);
+    var command = parts[0];
+
+    if (command === "/help") {
+      appendMessage("assistant", "**Verfuegbare Befehle:**\n\n- /help — Diese Hilfe\n- /skills — Alle Skills anzeigen\n- /memory — Chat-Historie durchsuchen\n- /new — Neue Sitzung\n- /clear — Aktuelle Sitzung leeren\n- /settings — Einstellungen oeffnen\n\n**Skills (natuerlich eingeben):**\n- oeffne Safari / Terminal / Finder\n- screenshot\n- system info\n- lese datei /pfad\n- liste /verzeichnis\n- web suche begriff\n- datum / uhrzeit", Date.now(), true);
+    } else if (command === "/skills") {
+      switchView("skills");
+    } else if (command === "/memory") {
+      switchView("memory");
+    } else if (command === "/new") {
+      newSession();
+    } else if (command === "/clear") {
+      clearCurrentSession();
+    } else if (command === "/settings") {
+      switchView("settings");
+    } else {
+      appendMessage("assistant", "Unbekannter Befehl: " + command + "\nTippe /help fuer alle Befehle.", Date.now(), true);
+    }
   }
 
   function newSession() {
-    settings.currentSession = generateId();
-    setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
-    sessions.push({id: settings.currentSession, name: "Sitzung " + (sessions.length + 1), created: Date.now()});
-    saveSessions();
-    updateSessionSelect();
+    callBackend("memory_create_session", { name: "" }).then(function(sid) {
+      settings.currentSession = sid;
+      setSetting(STORAGE_KEYS.currentSession, sid);
+      chatHistory[sid] = [];
+      renderChatMessages();
+      updateSessionSelect();
+    }).catch(function() {
+      settings.currentSession = generateId();
+      setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
+      chatHistory[settings.currentSession] = [];
+      renderChatMessages();
+    });
+  }
+
+  function clearCurrentSession() {
+    var sid = settings.currentSession;
+    if (!sid) return;
+    chatHistory[sid] = [];
     renderChatMessages();
+    // Memory-Session loeschen und neue erstellen
+    callBackend("memory_delete_session", { sessionId: sid }).then(function() {
+      newSession();
+    }).catch(function() {});
   }
 
   function selectSession(sid) {
+    if (!sid) {
+      newSession();
+      return;
+    }
     settings.currentSession = sid;
     setSetting(STORAGE_KEYS.currentSession, sid);
-    renderChatMessages();
-    updateSessionSelect();
+    loadMessagesForSession(sid);
   }
 
-  // --- MEMORY ---
-  var memoryData = [];
-  function loadMemory() {
-    var list = $("memoryList");
-    list.innerHTML = '<div class="empty-state"><p>Lade Memory-Eintraege...</p></div>';
-    callBackend("get_memory", { serverUrl: settings.serverUrl }).then(function(result) {
-      try {
-        var data = JSON.parse(result);
-        if (Array.isArray(data)) {
-          memoryData = data;
-        } else if (data && data.commits) {
-          memoryData = data.commits;
-        } else {
-          memoryData = [];
-        }
-        renderMemory("");
-      } catch (e) {
-        list.innerHTML = '<div class="empty-state"><p>Memory nicht verfuegbar.</p><p style="margin-top:8px;font-size:12px;">Der Memory-Endpunkt ist derzeit nicht aktiv.</p></div>';
-      }
-    }).catch(function() {
-      list.innerHTML = '<div class="empty-state"><p>Memory nicht verfuegbar.</p><p style="margin-top:8px;font-size:12px;">Titan-Toti ist offline oder der Endpunkt existiert nicht.</p></div>';
-    });
-  }
-
-  function renderMemory(filter) {
-    var list = $("memoryList");
-    var filtered = memoryData;
-    if (filter) {
-      filter = filter.toLowerCase();
-      filtered = memoryData.filter(function(m) {
-        return (m.message || m.hash || "").toLowerCase().indexOf(filter) >= 0;
-      });
-    }
-    if (filtered.length === 0) {
-      list.innerHTML = '<div class="empty-state"><p>Keine Memory-Eintraege gefunden.</p></div>';
-      return;
-    }
-    list.innerHTML = "";
-    filtered.forEach(function(m) {
-      var item = document.createElement("div");
-      item.className = "memory-item";
-      var hash = m.hash || m.id || "—";
-      var msg = m.message || m.title || m.summary || "Kein Inhalt";
-      var date = m.date || m.timestamp || m.created || "";
-      if (typeof date === "number") date = new Date(date * 1000).toLocaleString("de-DE");
-      item.innerHTML = '<div class="memory-item-header"><span class="memory-hash">' + escapeHtml(hash.substring(0, 12)) + '</span><span class="memory-date">' + escapeHtml(date) + '</span></div><div class="memory-message">' + escapeHtml(msg) + '</div>';
-      list.appendChild(item);
-    });
-  }
-
-  // --- SKILLS ---
-  var skillsData = [];
-  function loadSkills() {
-    var grid = $("skillsGrid");
-    grid.innerHTML = '<div class="empty-state"><p>Lade Skills...</p></div>';
-    callBackend("get_skills", { serverUrl: settings.serverUrl }).then(function(result) {
-      try {
-        var data = JSON.parse(result);
-        if (Array.isArray(data)) {
-          skillsData = data;
-        } else if (data && data.skills) {
-          skillsData = data.skills;
-        } else {
-          skillsData = [];
-        }
-        renderSkills("");
-      } catch (e) {
-        grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
-      }
-    }).catch(function() {
-      grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p><p style="margin-top:8px;font-size:12px;">Titan-Toti ist offline.</p></div>';
-    });
-  }
-
-  function renderSkills(filter) {
-    var grid = $("skillsGrid");
-    var count = $("skillsCount");
-    var filtered = skillsData;
-    if (filter) {
-      filter = filter.toLowerCase();
-      filtered = skillsData.filter(function(s) {
-        var name = s.name || s.title || "";
-        var desc = s.description || s.desc || "";
-        var cat = s.category || "";
-        return name.toLowerCase().indexOf(filter) >= 0 || desc.toLowerCase().indexOf(filter) >= 0 || cat.toLowerCase().indexOf(filter) >= 0;
-      });
-    }
-    count.textContent = filtered.length;
-    if (filtered.length === 0) {
-      grid.innerHTML = '<div class="empty-state"><p>Keine Skills gefunden.</p></div>';
-      return;
-    }
-    grid.innerHTML = "";
-    filtered.forEach(function(s) {
-      var card = document.createElement("div");
-      card.className = "skill-card";
-      var name = s.name || s.title || "Skill";
-      var desc = s.description || s.desc || "Keine Beschreibung";
-      var cat = s.category || "Allgemein";
-      card.innerHTML = '<div class="skill-name">' + escapeHtml(name) + '</div><div class="skill-desc">' + escapeHtml(desc) + '</div><span class="skill-category">' + escapeHtml(cat) + '</span>';
-      grid.appendChild(card);
-    });
-  }
-
-  // --- SETTINGS ---
-  function initSettings() {
-    $("serverUrlInput").value = settings.serverUrl;
-    $("inviteCodeInput").value = settings.inviteCode;
-    $("modelSelect").value = settings.model;
-    $("tempSlider").value = settings.temperature;
-    $("tempValue").textContent = settings.temperature;
-    $("tokensSlider").value = settings.maxTokens;
-    $("tokensValue").textContent = settings.maxTokens;
-    $("themeToggle").checked = settings.theme === "light";
-    $("serverUrlDisplay").textContent = settings.serverUrl.replace("http://", "").replace("https://", "");
-    if (settings.inviteLabel) {
-      $("connectStatus").textContent = "Verbunden als: " + settings.inviteLabel;
-      $("connectStatus").className = "hint success";
-    }
-  }
-
-  function saveSettings() {
-    setSetting(STORAGE_KEYS.serverUrl, $("serverUrlInput").value || defaults.serverUrl);
-    setSetting(STORAGE_KEYS.model, $("modelSelect").value);
-    setSetting(STORAGE_KEYS.temperature, $("tempSlider").value);
-    setSetting(STORAGE_KEYS.maxTokens, $("tokensSlider").value);
-    var theme = $("themeToggle").checked ? "light" : "dark";
-    setSetting(STORAGE_KEYS.theme, theme);
-    settings.serverUrl = getSetting(STORAGE_KEYS.serverUrl, defaults.serverUrl);
-    settings.model = getSetting(STORAGE_KEYS.model, defaults.model);
-    settings.temperature = getSettingNum(STORAGE_KEYS.temperature, defaults.temperature);
-    settings.maxTokens = getSettingNum(STORAGE_KEYS.maxTokens, defaults.maxTokens);
-    settings.theme = getSetting(STORAGE_KEYS.theme, defaults.theme);
-    $("serverUrlDisplay").textContent = settings.serverUrl.replace("http://", "").replace("https://", "");
-    applyTheme();
-    startStatusTimer();
-  }
-
-  function applyTheme() {
-    if (settings.theme === "light") {
-      document.body.setAttribute("data-theme", "light");
-    } else {
-      document.body.removeAttribute("data-theme");
-    }
-  }
-
-  function connectInvite() {
-    var code = $("inviteCodeInput").value.trim();
-    if (!code) {
-      $("connectStatus").textContent = "Bitte Invite-Code eingeben.";
-      $("connectStatus").className = "hint error";
-      return;
-    }
-    $("connectBtn").disabled = true;
-    $("connectStatus").textContent = "Verbinde...";
-    $("connectStatus").className = "hint";
-    callBackend("invite", { code: code, serverUrl: settings.serverUrl }).then(function(result) {
-      $("connectBtn").disabled = false;
-      try {
-        var data = JSON.parse(result);
-        if (data.valid) {
-          settings.inviteToken = data.token;
-          settings.inviteCode = code;
-          settings.inviteLabel = data.label || code;
-          setSetting(STORAGE_KEYS.inviteToken, data.token);
-          setSetting(STORAGE_KEYS.inviteCode, code);
-          setSetting(STORAGE_KEYS.inviteLabel, settings.inviteLabel);
-          $("connectStatus").textContent = "Verbunden als: " + settings.inviteLabel + " (Limit: " + data.daily_limit + "/h)";
-          $("connectStatus").className = "hint success";
-        } else {
-          $("connectStatus").textContent = "Code abgelehnt.";
-          $("connectStatus").className = "hint error";
-        }
-      } catch (e) {
-        $("connectStatus").textContent = "Verbindungsfehler: " + result;
-        $("connectStatus").className = "hint error";
-      }
-    }).catch(function(err) {
-      $("connectBtn").disabled = false;
-      $("connectStatus").textContent = "Fehler: " + err;
-      $("connectStatus").className = "hint error";
-    });
-  }
-
-  function testConnection() {
-    $("testConnStatus").textContent = "Teste...";
-    $("testConnStatus").className = "hint";
-    callBackend("health_check", { serverUrl: $("serverUrlInput").value || settings.serverUrl }).then(function(ok) {
-      $("testConnStatus").textContent = ok ? "Verbindung erfolgreich!" : "Titan-Toti nicht erreichbar.";
-      $("testConnStatus").className = "hint " + (ok ? "success" : "error");
-    }).catch(function(err) {
-      $("testConnStatus").textContent = "Fehler: " + err;
-      $("testConnStatus").className = "hint error";
-    });
-  }
-
-  function doLogout() {
-    if (!settings.inviteToken) {
-      $("logoutStatus").textContent = "Nicht angemeldet.";
-      $("logoutStatus").className = "hint";
-      return;
-    }
-    callBackend("logout", { invite_token: settings.inviteToken, serverUrl: settings.serverUrl }).then(function() {
-      settings.inviteToken = "";
-      settings.inviteLabel = "";
-      localStorage.removeItem(STORAGE_KEYS.inviteToken);
-      localStorage.removeItem(STORAGE_KEYS.inviteLabel);
-      $("logoutStatus").textContent = "Abgemeldet.";
-      $("logoutStatus").className = "hint success";
-      $("connectStatus").textContent = "";
-    }).catch(function(err) {
-      $("logoutStatus").textContent = "Fehler: " + err;
-      $("logoutStatus").className = "hint error";
-    });
-  }
-
-  function exportData() {
-    if (!settings.inviteToken) {
-      $("dsvoStatus").textContent = "Bitte zuerst verbinden.";
-      $("dsvoStatus").className = "hint error";
-      return;
-    }
-    callBackend("export_data", { invite_token: settings.inviteToken, serverUrl: settings.serverUrl }).then(function(result) {
-      var blob = new Blob([result], {type: "application/json"});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "titan-toti-export.json";
-      a.click();
-      URL.revokeObjectURL(url);
-      $("dsvoStatus").textContent = "Daten exportiert!";
-      $("dsvoStatus").className = "hint success";
-    }).catch(function(err) {
-      $("dsvoStatus").textContent = "Fehler: " + err;
-      $("dsvoStatus").className = "hint error";
-    });
-  }
-
-  function deleteData() {
-    if (!settings.inviteToken) {
-      $("dsvoStatus").textContent = "Bitte zuerst verbinden.";
-      $("dsvoStatus").className = "hint error";
-      return;
-    }
-    if (!confirm("Moechtest du wirklich alle deine Daten loeschen? Diese Aktion kann nicht rueckgaengig gemacht werden.")) return;
-    callBackend("delete_data", { invite_token: settings.inviteToken, serverUrl: settings.serverUrl }).then(function(ok) {
-      if (ok) {
-        $("dsvoStatus").textContent = "Daten geloescht!";
-        $("dsvoStatus").className = "hint success";
-      } else {
-        $("dsvoStatus").textContent = "Loeschung fehlgeschlagen.";
-        $("dsvoStatus").className = "hint error";
-      }
-    }).catch(function(err) {
-      $("dsvoStatus").textContent = "Fehler: " + err;
-      $("dsvoStatus").className = "hint error";
-    });
-  }
-
-  // --- AUTO-RESIZE TEXTAREA ---
-  function autoResize(input) {
-    input.style.height = "auto";
-    input.style.height = Math.min(input.scrollHeight, 120) + "px";
-  }
-
-  // --- INIT ---
-  function init() {
-    // Theme
-    applyTheme();
-    // Settings
-    initSettings();
-    // Version
-    callBackend("app_version", {}).then(function(v) {
-      $("appVersion").textContent = "v" + v;
-    }).catch(function() {});
-    // Session-Auswahl
-    updateSessionSelect();
-    // Chat rendern
-    renderChatMessages();
-    // Status-Check starten
-    startStatusTimer();
-
-    // Navigation
-    $$(".nav-item").forEach(function(btn) {
-      btn.addEventListener("click", function() {
-        switchView(btn.getAttribute("data-view"));
-      });
-    });
-
-    // Chat
+  // --- CHAT SETUP ---
+  function setupChat() {
     var input = $("chatInput");
     input.addEventListener("keydown", function(e) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -695,38 +729,362 @@
     $("sessionSelect").addEventListener("change", function() {
       selectSession(this.value);
     });
+    setupFileDrop();
+  }
 
-    // Memory
+  function autoResize(input) {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  }
+
+  // --- MEMORY VIEW ---
+  function setupMemory() {
     $("refreshMemoryBtn").addEventListener("click", loadMemory);
     $("memorySearch").addEventListener("input", function() {
-      renderMemory(this.value);
+      searchMemory(this.value);
     });
+  }
 
-    // Skills
+  var allSessions = [];
+  function loadMemory() {
+    var list = $("memoryList");
+    list.innerHTML = '<div class="empty-state"><p>Lade Memory...</p></div>';
+    callBackend("memory_get_sessions", {}).then(function(result) {
+      try {
+        allSessions = JSON.parse(result);
+        renderMemorySessions("");
+      } catch (e) {
+        list.innerHTML = '<div class="empty-state"><p>Keine Memory-Daten.</p></div>';
+      }
+    }).catch(function() {
+      list.innerHTML = '<div class="empty-state"><p>Memory nicht verfuegbar.</p></div>';
+    });
+  }
+
+  function renderMemorySessions(filter) {
+    var list = $("memoryList");
+    if (allSessions.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>Keine Sitzungen gefunden.</p></div>';
+      return;
+    }
+    list.innerHTML = "";
+    allSessions.forEach(function(s) {
+      if (filter && s.name.toLowerCase().indexOf(filter) < 0) return;
+      var item = document.createElement("div");
+      item.className = "memory-item";
+      var date = new Date(s.created_at * 1000).toLocaleString("de-DE");
+      item.innerHTML = '<div class="memory-item-header"><span class="memory-hash">' + escapeHtml(s.name) + '</span><span class="memory-date">' + escapeHtml(date) + '</span></div><div class="memory-message">' + s.message_count + ' Nachrichten — <button class="btn-link memory-load" data-id="' + escapeHtml(s.id) + '">Laden</button> <button class="btn-link memory-delete" data-id="' + escapeHtml(s.id) + '">Loeschen</button></div>';
+      list.appendChild(item);
+    });
+    list.querySelectorAll(".memory-load").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var sid = btn.getAttribute("data-id");
+        settings.currentSession = sid;
+        setSetting(STORAGE_KEYS.currentSession, sid);
+        loadMessagesForSession(sid);
+        switchView("chat");
+      });
+    });
+    list.querySelectorAll(".memory-delete").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var sid = btn.getAttribute("data-id");
+        if (!confirm("Sitzung wirklich loeschen?")) return;
+        callBackend("memory_delete_session", { sessionId: sid }).then(function() {
+          loadMemory();
+        }).catch(function() {});
+      });
+    });
+  }
+
+  function searchMemory(query) {
+    if (!query) {
+      renderMemorySessions("");
+      return;
+    }
+    var list = $("memoryList");
+    list.innerHTML = '<div class="empty-state"><p>Suche...</p></div>';
+    callBackend("memory_search", { query: query }).then(function(result) {
+      try {
+        var results = JSON.parse(result);
+        if (results.length === 0) {
+          list.innerHTML = '<div class="empty-state"><p>Keine Treffer fuer "' + escapeHtml(query) + '".</p></div>';
+          return;
+        }
+        list.innerHTML = "";
+        results.forEach(function(r) {
+          var item = document.createElement("div");
+          item.className = "memory-item";
+          var date = new Date(r.timestamp * 1000).toLocaleString("de-DE");
+          item.innerHTML = '<div class="memory-item-header"><span class="memory-hash">' + escapeHtml(r.session_name) + ' — ' + escapeHtml(r.role) + '</span><span class="memory-date">' + escapeHtml(date) + '</span></div><div class="memory-message">' + escapeHtml(r.content) + '</div>';
+          list.appendChild(item);
+        });
+      } catch (e) {
+        list.innerHTML = '<div class="empty-state"><p>Suchfehler.</p></div>';
+      }
+    }).catch(function() {
+      list.innerHTML = '<div class="empty-state"><p>Suche fehlgeschlagen.</p></div>';
+    });
+  }
+
+  // --- SKILLS VIEW ---
+  function setupSettings() {
+    // Settings wird in initSettings + setupSettings zusammen behandelt
+  }
+
+  function loadSkills() {
+    var grid = $("skillsGrid");
+    grid.innerHTML = '<div class="empty-state"><p>Lade Skills...</p></div>';
+    callBackend("skills_list", {}).then(function(result) {
+      try {
+        var skills = JSON.parse(result);
+        renderSkills(skills, "");
+      } catch (e) {
+        grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
+      }
+    }).catch(function() {
+      grid.innerHTML = '<div class="empty-state"><p>Skills nicht verfuegbar.</p></div>';
+    });
+  }
+
+  function renderSkills(skills, filter) {
+    var grid = $("skillsGrid");
+    var count = $("skillsCount");
+    var filtered = skills;
+    if (filter) {
+      var f = filter.toLowerCase();
+      filtered = skills.filter(function(s) {
+        return (s.name || "").toLowerCase().indexOf(f) >= 0 ||
+               (s.description || "").toLowerCase().indexOf(f) >= 0 ||
+               (s.category || "").toLowerCase().indexOf(f) >= 0;
+      });
+    }
+    count.textContent = filtered.length;
+    if (filtered.length === 0) {
+      grid.innerHTML = '<div class="empty-state"><p>Keine Skills gefunden.</p></div>';
+      return;
+    }
+    grid.innerHTML = "";
+    filtered.forEach(function(s) {
+      var card = document.createElement("div");
+      card.className = "skill-card";
+      var sysBadge = s.requires_system ? '<span class="skill-badge-sys">System</span>' : '';
+      card.innerHTML = '<div class="skill-name">' + escapeHtml(s.name) + sysBadge + '</div><div class="skill-desc">' + escapeHtml(s.description) + '</div><span class="skill-category">' + escapeHtml(s.category) + '</span>';
+      grid.appendChild(card);
+    });
+  }
+
+  // --- SETTINGS ---
+  function initSettings() {
+    $("apiUrlInput").value = settings.apiUrl;
+    $("apiKeyInput").value = settings.apiKey;
+    $("modelSelect").value = settings.model;
+    if (!$("modelSelect").value) {
+      var opt = document.createElement("option");
+      opt.value = settings.model;
+      opt.textContent = settings.model;
+      $("modelSelect").appendChild(opt);
+      $("modelSelect").value = settings.model;
+    }
+    $("fallbackModelsInput").value = settings.fallbackModels;
+    $("tempSlider").value = settings.temperature;
+    $("tempValue").textContent = settings.temperature;
+    $("tokensSlider").value = settings.maxTokens;
+    $("tokensValue").textContent = settings.maxTokens;
+    $("systemPromptInput").value = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    $("systemAccessToggle").checked = settings.systemAccess;
+    $("skillsToggle").checked = settings.skillsEnabled;
+    $("themeToggle").checked = settings.theme === "light";
+    $("serverUrlDisplay").textContent = settings.apiUrl.replace("http://", "").replace("https://", "");
+  }
+
+  function saveSettings() {
+    setSetting(STORAGE_KEYS.apiUrl, $("apiUrlInput").value || defaults.apiUrl);
+    setSetting(STORAGE_KEYS.apiKey, $("apiKeyInput").value);
+    setSetting(STORAGE_KEYS.model, $("modelSelect").value || defaults.model);
+    setSetting(STORAGE_KEYS.fallbackModels, $("fallbackModelsInput").value);
+    setSetting(STORAGE_KEYS.temperature, $("tempSlider").value);
+    setSetting(STORAGE_KEYS.maxTokens, $("tokensSlider").value);
+    setSetting(STORAGE_KEYS.systemPrompt, $("systemPromptInput").value);
+    setSetting(STORAGE_KEYS.systemAccess, $("systemAccessToggle").checked ? "true" : "false");
+    setSetting(STORAGE_KEYS.skillsEnabled, $("skillsToggle").checked ? "true" : "false");
+    var theme = $("themeToggle").checked ? "light" : "dark";
+    setSetting(STORAGE_KEYS.theme, theme);
+
+    settings.apiUrl = getSetting(STORAGE_KEYS.apiUrl, defaults.apiUrl);
+    settings.apiKey = getSetting(STORAGE_KEYS.apiKey, defaults.apiKey);
+    settings.model = getSetting(STORAGE_KEYS.model, defaults.model);
+    settings.fallbackModels = getSetting(STORAGE_KEYS.fallbackModels, defaults.fallbackModels);
+    settings.temperature = getSettingNum(STORAGE_KEYS.temperature, defaults.temperature);
+    settings.maxTokens = getSettingNum(STORAGE_KEYS.maxTokens, defaults.maxTokens);
+    settings.systemPrompt = getSetting(STORAGE_KEYS.systemPrompt, "");
+    settings.systemAccess = getSettingBool(STORAGE_KEYS.systemAccess, defaults.systemAccess);
+    settings.skillsEnabled = getSettingBool(STORAGE_KEYS.skillsEnabled, defaults.skillsEnabled);
+    settings.theme = getSetting(STORAGE_KEYS.theme, defaults.theme);
+
+    $("serverUrlDisplay").textContent = settings.apiUrl.replace("http://", "").replace("https://", "");
+    applyTheme();
+    startStatusTimer();
+  }
+
+  function applyTheme() {
+    if (settings.theme === "light") {
+      document.body.setAttribute("data-theme", "light");
+    } else {
+      document.body.removeAttribute("data-theme");
+    }
+  }
+
+  function setupSettingsEvents() {
     $("skillsSearch").addEventListener("input", function() {
-      renderSkills(this.value);
+      loadSkillsForSearch(this.value);
+    });
+    $("apiUrlInput").addEventListener("change", saveSettings);
+    $("apiKeyInput").addEventListener("change", saveSettings);
+    $("modelSelect").addEventListener("change", saveSettings);
+    $("fallbackModelsInput").addEventListener("change", saveSettings);
+    $("tempSlider").addEventListener("input", function() { $("tempValue").textContent = this.value; saveSettings(); });
+    $("tokensSlider").addEventListener("input", function() { $("tokensValue").textContent = this.value; saveSettings(); });
+    $("systemPromptInput").addEventListener("change", saveSettings);
+    $("systemAccessToggle").addEventListener("change", saveSettings);
+    $("skillsToggle").addEventListener("change", saveSettings);
+    $("themeToggle").addEventListener("change", saveSettings);
+
+    $("refreshModelsSettingsBtn").addEventListener("click", function() {
+      loadModelsForSettings();
     });
 
-    // Settings
-    $("serverUrlInput").addEventListener("change", saveSettings);
-    $("modelSelect").addEventListener("change", saveSettings);
-    $("tempSlider").addEventListener("input", function() {
-      $("tempValue").textContent = this.value;
-      saveSettings();
+    $("testConnBtn").addEventListener("click", function() {
+      $("testConnStatus").textContent = "Teste...";
+      $("testConnStatus").className = "hint";
+      callBackend("ollama_health", { apiUrl: $("apiUrlInput").value }).then(function(ok) {
+        $("testConnStatus").textContent = ok ? "Verbindung erfolgreich!" : "Nicht erreichbar.";
+        $("testConnStatus").className = "hint " + (ok ? "success" : "error");
+      }).catch(function(err) {
+        $("testConnStatus").textContent = "Fehler: " + err;
+        $("testConnStatus").className = "hint error";
+      });
     });
-    $("tokensSlider").addEventListener("input", function() {
-      $("tokensValue").textContent = this.value;
-      saveSettings();
+
+    $("resetPromptBtn").addEventListener("click", function() {
+      callBackend("default_system_prompt", {}).then(function(p) {
+        $("systemPromptInput").value = p;
+        saveSettings();
+      }).catch(function() {
+        $("systemPromptInput").value = DEFAULT_SYSTEM_PROMPT_FALLBACK;
+        saveSettings();
+      });
     });
-    $("themeToggle").addEventListener("change", saveSettings);
-    $("connectBtn").addEventListener("click", connectInvite);
-    $("testConnBtn").addEventListener("click", testConnection);
-    $("logoutBtn").addEventListener("click", doLogout);
+
     $("exportDataBtn").addEventListener("click", exportData);
     $("deleteDataBtn").addEventListener("click", deleteData);
   }
 
-  // DOM ready
+  function loadModelsForSettings() {
+    var select = $("modelSelect");
+    var currentVal = select.value;
+    select.innerHTML = '<option value="">Lade...</option>';
+    callBackend("ollama_list_models", {
+      apiUrl: $("apiUrlInput").value,
+      apiKey: $("apiKeyInput").value
+    }).then(function(models) {
+      select.innerHTML = "";
+      if (models && models.length > 0) {
+        models.forEach(function(m) {
+          var opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          select.appendChild(opt);
+        });
+        // aktuellen Wert erhalten
+        var found = false;
+        for (var i = 0; i < select.options.length; i++) {
+          if (select.options[i].value === currentVal) { select.value = currentVal; found = true; break; }
+        }
+        if (!found && currentVal) {
+          var opt = document.createElement("option");
+          opt.value = currentVal;
+          opt.textContent = currentVal + " (nicht gefunden)";
+          select.appendChild(opt);
+          select.value = currentVal;
+        }
+      } else {
+        select.innerHTML = '<option value="' + escapeHtml(currentVal) + '">' + escapeHtml(currentVal) + '</option>';
+      }
+    }).catch(function() {
+      select.innerHTML = '<option value="' + escapeHtml(currentVal) + '">' + escapeHtml(currentVal) + '</option>';
+    });
+  }
+
+  function loadSkillsForSearch(filter) {
+    callBackend("skills_list", {}).then(function(result) {
+      try {
+        var skills = JSON.parse(result);
+        renderSkills(skills, filter);
+      } catch (e) {}
+    }).catch(function() {});
+  }
+
+  function exportData() {
+    callBackend("memory_get_sessions", {}).then(function(sessionsResult) {
+      var exportObj = {
+        app: "Titan Toti",
+        version: "2.0.0",
+        export_date: new Date().toISOString(),
+        settings: {
+          apiUrl: settings.apiUrl,
+          model: settings.model,
+          temperature: settings.temperature,
+          maxTokens: settings.maxTokens
+        },
+        sessions: JSON.parse(sessionsResult)
+      };
+      // Alle Nachrichten laden
+      var sessions = exportObj.sessions;
+      var promises = sessions.map(function(s) {
+        return callBackend("memory_get_messages", { sessionId: s.id }).then(function(msgs) {
+          s.messages = JSON.parse(msgs);
+        }).catch(function() { s.messages = []; });
+      });
+      Promise.all(promises).then(function() {
+        var blob = new Blob([JSON.stringify(exportObj, null, 2)], {type: "application/json"});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "titan-toti-export-" + Date.now() + ".json";
+        a.click();
+        URL.revokeObjectURL(url);
+        $("dsvoStatus").textContent = "Daten exportiert!";
+        $("dsvoStatus").className = "hint success";
+      });
+    }).catch(function(err) {
+      $("dsvoStatus").textContent = "Fehler: " + err;
+      $("dsvoStatus").className = "hint error";
+    });
+  }
+
+  function deleteData() {
+    if (!confirm("Moechtest du wirklich alle Daten loeschen? Dies kann nicht rueckgaengig gemacht werden.")) return;
+    callBackend("memory_clear_all", {}).then(function() {
+      // localStorage auch leeren
+      localStorage.removeItem(STORAGE_KEYS.currentSession);
+      localStorage.removeItem(STORAGE_KEYS.setupDone);
+      chatHistory = {};
+      renderChatMessages();
+      $("dsvoStatus").textContent = "Alle Daten geloescht!";
+      $("dsvoStatus").className = "hint success";
+      updateSessionSelect();
+    }).catch(function(err) {
+      $("dsvoStatus").textContent = "Fehler: " + err;
+      $("dsvoStatus").className = "hint error";
+    });
+  }
+
+  // --- INIT ---
+  function init() {
+    setupSettingsEvents();
+    initSetup();
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {

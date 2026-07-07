@@ -5,9 +5,78 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Titan Toti</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="update.css" />
 </head>
 <body>
-  <div class="app">
+
+  <!-- SETUP SCREEN (erster Start) -->
+  <div id="setupScreen" class="setup-screen">
+    <div class="setup-card">
+      <div class="setup-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:48px;height:48px;color:var(--accent);">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 12l10 5 10-5"/>
+          <path d="M2 17l10 5 10-5"/>
+        </svg>
+      </div>
+      <h1>Willkommen bei Titan Toti</h1>
+      <p class="setup-subtitle">Verbinde dich mit einem KI-Modell — lokal oder in der Cloud.</p>
+
+      <div class="setup-options">
+        <button class="setup-option" data-mode="local">
+          <div class="setup-option-icon">🏠</div>
+          <div class="setup-option-text">
+            <div class="setup-option-title">Lokal (Ollama auf diesem Mac)</div>
+            <div class="setup-option-desc">http://localhost:11434 — kein API-Key nötig</div>
+          </div>
+        </button>
+        <button class="setup-option" data-mode="cloud">
+          <div class="setup-option-icon">☁️</div>
+          <div class="setup-option-text">
+            <div class="setup-option-title">Ollama Cloud</div>
+            <div class="setup-option-desc">https://api.ollama.ai — API-Key erforderlich</div>
+          </div>
+        </button>
+        <button class="setup-option" data-mode="custom">
+          <div class="setup-option-icon">⚙️</div>
+          <div class="setup-option-text">
+            <div class="setup-option-title">Custom (OpenAI-kompatibel)</div>
+            <div class="setup-option-desc">Eigene API URL + API Key</div>
+          </div>
+        </button>
+      </div>
+
+      <div id="setupConfig" class="setup-config" style="display:none;">
+        <div class="form-group">
+          <label for="setupApiUrl">API URL</label>
+          <input type="text" id="setupApiUrl" placeholder="http://localhost:11434" />
+        </div>
+        <div class="form-group" id="setupApiKeyGroup" style="display:none;">
+          <label for="setupApiKey">API Key (optional)</label>
+          <input type="password" id="setupApiKey" placeholder="API Key..." />
+        </div>
+        <div class="form-group">
+          <label for="setupModelSelect">Modell wählen</label>
+          <div class="input-row">
+            <select id="setupModelSelect">
+              <option value="">Modelle werden geladen...</option>
+            </select>
+            <button class="btn-secondary" id="refreshModelsBtn">Modelle laden</button>
+          </div>
+          <input type="text" id="setupModelInput" placeholder="Oder Modellnamen eingeben (z.B. llama3.2)" style="margin-top:8px;" />
+        </div>
+
+        <div class="setup-actions">
+          <button class="btn-primary" id="setupConnectBtn">Verbinden</button>
+          <button class="btn-secondary" id="setupOfflineBtn">Ohne Server fortfahren</button>
+        </div>
+        <div class="hint" id="setupStatus"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div class="app" id="mainApp" style="display:none;">
     <!-- SIDEBAR -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
@@ -19,7 +88,7 @@
           </svg>
           <div class="logo-text">
             <span class="logo-title">Titan Toti</span>
-            <span class="logo-version" id="appVersion">v1.0.0</span>
+            <span class="logo-version" id="appVersion">v2.0.0</span>
           </div>
         </div>
       </div>
@@ -46,9 +115,9 @@
       <div class="sidebar-footer">
         <div class="status-row">
           <span class="status-dot" id="statusDot"></span>
-          <span class="status-text" id="statusText">Pruefe Status...</span>
+          <span class="status-text" id="statusText">Pruefe...</span>
         </div>
-        <div class="server-url" id="serverUrlDisplay">localhost:8460</div>
+        <div class="server-url" id="serverUrlDisplay">localhost:11434</div>
       </div>
     </aside>
 
@@ -75,7 +144,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
               </div>
               <h2>Willkommen bei Titan Toti</h2>
-              <p>Stelle eine Frage oder starte ein Gespraech. Gib zuerst in den Einstellungen deinen Invite-Code ein, falls du noch nicht verbunden bist.</p>
+              <p>Stelle eine Frage, starte ein Gespraech oder probiere einen Skill: "oeffne Safari", "screenshot", "system info". Tippe /help fuer alle Befehle.</p>
             </div>
           </div>
 
@@ -84,11 +153,15 @@
           </div>
 
           <div class="chat-input-area">
-            <textarea id="chatInput" class="chat-input" placeholder="Nachricht schreiben..." rows="1"></textarea>
+            <div class="chat-input-wrapper">
+              <div id="fileDropHint" class="file-drop-hint" style="display:none;">Datei ablegen — wird als Context gesendet</div>
+              <textarea id="chatInput" class="chat-input" placeholder="Nachricht schreiben... (/help fuer Befehle)" rows="1"></textarea>
+            </div>
             <button class="btn-send" id="sendBtn" title="Senden (Enter)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
             </button>
           </div>
+          <div id="attachedFiles" class="attached-files"></div>
         </div>
       </section>
 
@@ -96,18 +169,13 @@
       <section class="view" id="view-memory">
         <div class="view-header">
           <h1>Memory</h1>
-          <button class="btn-secondary" id="refreshMemoryBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-            Aktualisieren
-          </button>
+          <button class="btn-secondary" id="refreshMemoryBtn">Aktualisieren</button>
         </div>
         <div class="search-bar">
           <input type="text" id="memorySearch" placeholder="Memory durchsuchen..." />
         </div>
         <div class="memory-list" id="memoryList">
-          <div class="empty-state">
-            <p>Lade Memory-Eintraege...</p>
-          </div>
+          <div class="empty-state"><p>Lade Memory...</p></div>
         </div>
       </section>
 
@@ -121,9 +189,7 @@
           <input type="text" id="skillsSearch" placeholder="Skills durchsuchen..." />
         </div>
         <div class="skills-grid" id="skillsGrid">
-          <div class="empty-state">
-            <p>Lade Skills...</p>
-          </div>
+          <div class="empty-state"><p>Lade Skills...</p></div>
         </div>
       </section>
 
@@ -133,19 +199,27 @@
           <h1>Einstellungen</h1>
         </div>
         <div class="settings-container">
+
           <div class="settings-card">
-            <h2 class="settings-card-title">Verbindung</h2>
+            <h2 class="settings-card-title">API-Konfiguration</h2>
             <div class="form-group">
-              <label for="serverUrlInput">Server-URL</label>
-              <input type="text" id="serverUrlInput" placeholder="http://localhost:8460" />
+              <label for="apiUrlInput">API URL</label>
+              <input type="text" id="apiUrlInput" placeholder="http://localhost:11434" />
             </div>
             <div class="form-group">
-              <label for="inviteCodeInput">Invite-Code</label>
+              <label for="apiKeyInput">API Key (optional)</label>
+              <input type="password" id="apiKeyInput" placeholder="leer fuer lokal" />
+            </div>
+            <div class="form-group">
+              <label for="modelSelect">Hauptmodell</label>
               <div class="input-row">
-                <input type="text" id="inviteCodeInput" placeholder="z.B. titan-admin" />
-                <button class="btn-primary" id="connectBtn">Verbinden</button>
+                <select id="modelSelect"><option value="glm-5.2:cloud">glm-5.2:cloud</option></select>
+                <button class="btn-secondary" id="refreshModelsSettingsBtn">Modelle laden</button>
               </div>
-              <div class="hint" id="connectStatus"></div>
+            </div>
+            <div class="form-group">
+              <label for="fallbackModelsInput">Fallback-Modelle (kommasepariert)</label>
+              <input type="text" id="fallbackModelsInput" placeholder="llama3.2, qwen2.5, mistral" />
             </div>
             <div class="form-group">
               <button class="btn-secondary" id="testConnBtn">Verbindung testen</button>
@@ -154,15 +228,7 @@
           </div>
 
           <div class="settings-card">
-            <h2 class="settings-card-title">Modell</h2>
-            <div class="form-group">
-              <label for="modelSelect">Sprachmodell</label>
-              <select id="modelSelect">
-                <option value="glm-5.2:cloud">glm-5.2:cloud</option>
-                <option value="deepseek-v4-flash:cloud">deepseek-v4-flash:cloud</option>
-                <option value="gemini-3-flash-preview:cloud">gemini-3-flash-preview:cloud</option>
-              </select>
-            </div>
+            <h2 class="settings-card-title">Modell-Parameter</h2>
             <div class="form-group">
               <label for="tempSlider">Temperatur: <span id="tempValue">0.7</span></label>
               <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.7" />
@@ -170,6 +236,41 @@
             <div class="form-group">
               <label for="tokensSlider">Max Tokens: <span id="tokensValue">8192</span></label>
               <input type="range" id="tokensSlider" min="1024" max="8192" step="512" value="8192" />
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h2 class="settings-card-title">System-Prompt</h2>
+            <div class="form-group">
+              <textarea id="systemPromptInput" rows="4" style="width:100%;resize:vertical;font-family:inherit;"></textarea>
+            </div>
+            <button class="btn-secondary" id="resetPromptBtn">Zurücksetzen</button>
+          </div>
+
+          <div class="settings-card">
+            <h2 class="settings-card-title">System-Zugriff & Skills</h2>
+            <div class="form-group">
+              <label>System-Zugriff (Commands, Dateien, Apps)</label>
+              <div class="toggle-row">
+                <span>Aus</span>
+                <label class="switch">
+                  <input type="checkbox" id="systemAccessToggle" checked />
+                  <span class="slider"></span>
+                </label>
+                <span>Ein</span>
+              </div>
+              <p class="hint">Wenn aktiviert, kann Titan Toti System-Befehle ausfuehren, Dateien lesen/schreiben und Apps oeffnen.</p>
+            </div>
+            <div class="form-group">
+              <label>Skills aktiviert</label>
+              <div class="toggle-row">
+                <span>Aus</span>
+                <label class="switch">
+                  <input type="checkbox" id="skillsToggle" checked />
+                  <span class="slider"></span>
+                </label>
+                <span>Ein</span>
+              </div>
             </div>
           </div>
 
@@ -186,37 +287,30 @@
                 <span>Hell</span>
               </div>
             </div>
-            <div class="form-group">
-              <label>Sprache</label>
-              <div class="hint">Deutsch (fix)</div>
-            </div>
           </div>
 
           <div class="settings-card">
             <h2 class="settings-card-title">Datenschutz (DSGVO)</h2>
             <div class="form-group">
-              <label>Deine Daten</label>
-              <p class="hint">Exportiere oder loesche alle deine gespeicherten Daten gemaess DSGVO Art. 20 und Art. 17.</p>
+              <label>Memory-Pfad</label>
+              <div class="hint" id="memoryPathDisplay">~/.titan-toti/memory.json</div>
+            </div>
+            <div class="form-group">
+              <p class="hint">Alle Daten liegen lokal auf diesem Mac. Keine Daten werden an Server gesendet (ausser API-Calls an Ollama).</p>
               <div class="btn-row">
                 <button class="btn-secondary" id="exportDataBtn">Daten exportieren</button>
-                <button class="btn-danger" id="deleteDataBtn">Daten loeschen</button>
+                <button class="btn-danger" id="deleteDataBtn">Alle Daten löschen</button>
               </div>
               <div class="hint" id="dsvoStatus"></div>
             </div>
           </div>
 
-          <div class="settings-card">
-            <h2 class="settings-card-title">Sitzung</h2>
-            <div class="form-group">
-              <button class="btn-danger" id="logoutBtn">Abmelden</button>
-              <div class="hint" id="logoutStatus"></div>
-            </div>
-          </div>
         </div>
       </section>
     </main>
   </div>
 
   <script src="main.js"></script>
+  <script src="update.js"></script>
 </body>
 </html>
