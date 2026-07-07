@@ -1283,3 +1283,20 @@ p, span, div, h1, h2, h3, h4, h5, h6, li, a, code, pre {
     width: 95vw;
   }
 }
+
+/* Ollama Connect Loading Spinner */
+.ollama-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-color, #444);
+  border-top-color: var(--accent, #6c821f);
+  border-radius: 50%;
+  animation: ollama-spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+
+@keyframes ollama-spin {
+  to { transform: rotate(360deg); }
+}

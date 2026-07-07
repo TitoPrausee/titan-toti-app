@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri_plugin_opener::OpenerExt;
 
-const APP_VERSION: &str = "2.2.0";
+const APP_VERSION: &str = "2.2.1";
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
 
@@ -372,23 +372,39 @@ fn memory_path() -> String {
 }
 
 /// Ollama Login im Browser oeffnen (vereinfachter OAuth-aehnlicher Flow)
-/// Oeffnet https://ollama.com/login im Standard-Browser.
+/// Oeffnet https://ollama.com/signin im Standard-Browser (303 redirect zu signin.ollama.com).
 /// Der User loggt sich ein, kopiert seinen API Key und fuegt ihn in der App ein.
+/// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_login(app: tauri::AppHandle) -> Result<bool, String> {
-    let login_url = "https://ollama.com/login";
-    app.opener().open_url(login_url, None::<&str>)
-        .map_err(|e| format!("Konnte Browser nicht oeffnen: {}", e))?;
-    Ok(true)
+    let login_url = "https://ollama.com/signin".to_string();
+    open_url_nonblocking(&app, &login_url)
 }
 
-/// Ollama API Keys Seite im Browser oeffnen
+/// Ollama API Keys / Dashboard im Browser oeffnen
+/// Oeffnet https://ollama.com/dashboard -- nach Login sieht man das Dashboard mit API Keys Option.
+/// Non-blocking: oeffnet Browser asynchron, returned sofort.
 #[tauri::command]
 async fn open_ollama_keys(app: tauri::AppHandle) -> Result<bool, String> {
-    let keys_url = "https://ollama.com/settings/keys";
-    app.opener().open_url(keys_url, None::<&str>)
-        .map_err(|e| format!("Konnte Browser nicht oeffnen: {}", e))?;
-    Ok(true)
+    let keys_url = "https://ollama.com/dashboard".to_string();
+    open_url_nonblocking(&app, &keys_url)
+}
+
+/// Hilfsfunktion: Oeffnet URL im Standard-Browser, non-blocking.
+/// Versucht zuerst tauri-plugin-opener, faellt auf std::process::Command zurueck.
+fn open_url_nonblocking(app: &tauri::AppHandle, url: &str) -> Result<bool, String> {
+    // Versuch 1: tauri-plugin-opener (non-blocking)
+    match app.opener().open_url(url, None::<&str>) {
+        Ok(_) => return Ok(true),
+        Err(e) => {
+            eprintln!("Opener-Plugin fehlgeschlagen ({}), versuche std::process::Command", e);
+        }
+    }
+    // Versuch 2: std::process::Command mit spawn() (non-blocking, wartet nicht)
+    match std::process::Command::new("open").arg(url).spawn() {
+        Ok(_) => Ok(true),
+        Err(e) => Err(format!("Konnte Browser nicht oeffnen: {}", e)),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

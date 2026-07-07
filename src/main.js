@@ -241,17 +241,21 @@
     modal.style.display = "flex";
     modal.classList.remove("modal-closing");
     modal.classList.add("modal-opening");
-    // Browser oeffnen
+
+    // Loading-Spinner anzeigen
+    $("ollamaConnectStatus").innerHTML = '<span class="ollama-spinner"></span> Oeffne Browser...';
+    $("ollamaConnectStatus").className = "hint";
+    $("ollamaConnectKey").value = "";
+
+    // Browser oeffnen -- non-blocking, sofortige Rueckmeldung
     callBackend("open_ollama_login", {}).then(function() {
-      $("ollamaConnectStatus").textContent = "Browser geöffnet. Bitte logge dich ein und kopiere deinen API Key.";
-      $("ollamaConnectStatus").className = "hint";
+      $("ollamaConnectStatus").textContent = "Browser geoeffnet. Bitte logge dich auf ollama.com ein und kopiere deinen API Key.";
+      $("ollamaConnectStatus").className = "hint success";
+      setTimeout(function() { $("ollamaConnectKey").focus(); }, 100);
     }).catch(function(err) {
-      $("ollamaConnectStatus").textContent = "Browser konnte nicht geöffnet werden: " + err;
+      $("ollamaConnectStatus").innerHTML = "Browser konnte nicht geoeffnet werden. Bitte oeffne <a href=\"https://ollama.com/signin\" target=\"_blank\" rel=\"noopener\">https://ollama.com/signin</a> manuell.";
       $("ollamaConnectStatus").className = "hint error";
     });
-    // Key zuruecksetzen
-    $("ollamaConnectKey").value = "";
-    setTimeout(function() { $("ollamaConnectKey").focus(); }, 100);
   }
 
   function closeOllamaConnectModal() {
