@@ -77,8 +77,15 @@
 
   <!-- MAIN APP -->
   <div class="app" id="mainApp" style="display:none;">
+    <!-- HAMBURGER BUTTON (nur bei <700px) -->
+    <button class="hamburger-btn" id="hamburgerBtn" title="Menue oeffnen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <!-- SIDEBAR BACKDROP (bei <700px) -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
     <!-- SIDEBAR -->
     <aside class="sidebar" id="sidebar">
+      <button class="sidebar-close" id="sidebarClose" title="Menue schliessen">x</button>
       <div class="sidebar-header">
         <div class="logo">
           <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -88,7 +95,7 @@
           </svg>
           <div class="logo-text">
             <span class="logo-title">Titan Toti</span>
-            <span class="logo-version" id="appVersion">v2.0.0</span>
+            <span class="logo-version" id="appVersion">v2.1.0</span>
           </div>
         </div>
       </div>

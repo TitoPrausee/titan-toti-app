@@ -283,6 +283,66 @@
     setupChat();
     setupMemory();
     setupSettings();
+    setupResponsive();
+  }
+
+  // --- RESPONSIVE / HAMBURGER MENU ---
+  function setupResponsive() {
+    var hamburger = $("hamburgerBtn");
+    var sidebar = $("sidebar");
+    var backdrop = $("sidebarBackdrop");
+    var closeBtn = $("sidebarClose");
+
+    function isMobile() {
+      return window.innerWidth < 700;
+    }
+
+    function openSidebar() {
+      if (!sidebar) return;
+      sidebar.classList.add("open");
+      if (backdrop) backdrop.classList.add("visible");
+    }
+
+    function closeSidebar() {
+      if (!sidebar) return;
+      sidebar.classList.remove("open");
+      if (backdrop) backdrop.classList.remove("visible");
+    }
+
+    if (hamburger) {
+      hamburger.addEventListener("click", function() {
+        if (sidebar && sidebar.classList.contains("open")) {
+          closeSidebar();
+        } else {
+          openSidebar();
+        }
+      });
+    }
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", closeSidebar);
+    }
+
+    if (backdrop) {
+      backdrop.addEventListener("click", closeSidebar);
+    }
+
+    // Window resize listener
+    window.addEventListener("resize", function() {
+      var w = window.innerWidth;
+      if (w >= 700) {
+        // Sidebar permanent sichtbar, Hamburger verstecken
+        closeSidebar();
+        if (sidebar) sidebar.style.display = "";
+      } else {
+        if (sidebar) sidebar.style.display = "";
+      }
+    });
+
+    // Initial pruefen
+    if (!isMobile()) {
+      closeSidebar();
+    }
   }
 
   // --- NAVIGATION ---
@@ -302,6 +362,13 @@
     if (navBtn) navBtn.classList.add("active");
     if (view === "memory") loadMemory();
     if (view === "skills") loadSkills();
+    // Sidebar bei mobiler Ansicht schliessen nach View-Wechsel
+    var sidebar = $("sidebar");
+    var backdrop = $("sidebarBackdrop");
+    if (sidebar && window.innerWidth < 700) {
+      sidebar.classList.remove("open");
+      if (backdrop) backdrop.classList.remove("visible");
+    }
   }
 
   // --- STATUS CHECK ---
