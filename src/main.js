@@ -1434,11 +1434,13 @@
     // GLTFLoader wurde bereits als ES-Modul geladen
     if (THREE.GLTFLoader) {
       var loader = new THREE.GLTFLoader();
-      // brain.glb aus assets laden
-      loader.load("assets/brain.glb",
+      // Realistisches MRI-basiertes Gehirn laden (190 anatomische Regionen)
+      loader.load("assets/brain_realistic.glb",
         function(gltf) {
           brainModel = gltf.scene;
-          // Zonen-Markierungen erstellen (falls das Modell sie nicht hat)
+          // Skalierung und Zentrierung basierend auf Bounding-Box
+          scaleAndCenterBrain(brainModel);
+          // Zonen-Zuordnung ueber Material-Namen (CoreMemory_Left, Skills_Right, Sensitive_Center)
           createBrainZones(brainModel);
           brainScene.add(brainModel);
           $("brainLoading").style.display = "none";
@@ -1449,16 +1451,47 @@
           }
         },
         function(err) {
-          // Fallback: Placeholder-Gehirn erstellen
-          console.log("brain.glb nicht verfuegbar, erstelle Placeholder");
-          createPlaceholderBrain();
-          $("brainLoading").style.display = "none";
+          // Fallback 1: altes stilisiertes brain.glb laden
+          console.log("brain_realistic.glb nicht verfuegbar, versuche brain.glb");
+          loader.load("assets/brain.glb",
+            function(gltf2) {
+              brainModel = gltf2.scene;
+              createBrainZones(brainModel);
+              brainScene.add(brainModel);
+              $("brainLoading").style.display = "none";
+            },
+            undefined,
+            function(err2) {
+              // Fallback 2: Placeholder-Gehirn (3 Sphaeren)
+              console.log("brain.glb auch nicht verfuegbar, erstelle Placeholder");
+              createPlaceholderBrain();
+              $("brainLoading").style.display = "none";
+            }
+          );
         }
       );
     } else {
       createPlaceholderBrain();
       $("brainLoading").style.display = "none";
     }
+  }
+
+  // MRI-Modell skalieren und zentrieren, damit es gut im Canvas sichtbar ist (Camera bei z=5)
+  function scaleAndCenterBrain(model) {
+    var THREE = window.THREE;
+    var bbox = new THREE.Box3().setFromObject(model);
+    var size = new THREE.Vector3();
+    bbox.getSize(size);
+    var center = new THREE.Vector3();
+    bbox.getCenter(center);
+    // Groesste Dimension an ~3.5 Einheiten normieren (sichtbar bei Camera z=5, FOV 50)
+    var maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) {
+      var scale = 3.5 / maxDim;
+      model.scale.setScalar(scale);
+    }
+    // Modell im Ursprung zentrieren
+    model.position.sub(center.multiplyScalar(model.scale.x));
   }
 
   // Placeholder-Gehirn: 3 Spheren fuer die 3 Zonen
@@ -1507,35 +1540,40 @@
   }
 
   function createBrainZones(model) {
-    var THREE = window.THREE;
-    // Wenn brain.glb geladen wurde, erstelle Zonen-Meshes darueber
-    // Suche nach Meshes mit bestimmten Namen oder erstelle Spheren als Overlays
-    // Falls das Modell bereits benannte Zonen hat, nutze diese
-    var hasNamedZones = false;
+    // MRI-Modell: 190 Meshes mit 3 Material-Gruppen
+    //   CoreMemory_Left  -> blau  -> core zone
+    //   Skills_Right     -> gruen -> skills zone
+    //   Sensitive_Center -> purple-> sensitive zone
+    // Die Farben werden NICHT ueberschrieben — das Modell hat bereits die
+    // richtigen Farben vom Blender-Agent. Wir setzen nur userData.zone pro Mesh.
+    // Zusaetzlich wird Node-Name als Fallback geprueft (fuer das alte brain.glb).
+    brainZones = [];
     model.traverse(function(child) {
       if (child.isMesh) {
-        var name = (child.name || "").toLowerCase();
-        if (name.indexOf("core") >= 0) {
+        var matName = "";
+        if (child.material && child.material.name) {
+          matName = child.material.name.toLowerCase();
+        }
+        var nodeName = (child.name || "").toLowerCase();
+        var combined = matName + " " + nodeName;
+
+        if (combined.indexOf("core") >= 0) {
           child.userData = { zone: "core", name: "Core Memory" };
-          if (child.material) child.material.color.setHex(0x4a9eff);
           brainZones.push(child);
-          hasNamedZones = true;
-        } else if (name.indexOf("skill") >= 0) {
+        } else if (combined.indexOf("skill") >= 0) {
           child.userData = { zone: "skills", name: "Skills" };
-          if (child.material) child.material.color.setHex(0x34c759);
           brainZones.push(child);
-          hasNamedZones = true;
-        } else if (name.indexOf("sensitive") >= 0 || name.indexOf("sens") >= 0) {
+        } else if (combined.indexOf("sensitive") >= 0 || combined.indexOf("sens_") >= 0 || combined.indexOf("center") >= 0) {
           child.userData = { zone: "sensitive", name: "Sensitive Data" };
-          if (child.material) child.material.color.setHex(0xbf5af2);
           brainZones.push(child);
-          hasNamedZones = true;
         }
       }
     });
 
-    // Falls keine benannten Zonen gefunden wurden, erstelle Overlay-Spheren
-    if (!hasNamedZones) {
+    // Falls keine Zonen ueber Material/Node-Namen gefunden wurden, erstelle
+    // Overlay-Spheren (Kompatibilitaet mit unbenannten Modellen)
+    if (brainZones.length === 0) {
+      var THREE = window.THREE;
       // Core — linke Haelfte
       var coreGeo = new THREE.SphereGeometry(0.8, 24, 24, 0, Math.PI);
       var coreMat = new THREE.MeshPhongMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.4, shininess: 60 });
