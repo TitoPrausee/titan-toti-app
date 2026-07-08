@@ -923,6 +923,152 @@ input[type="range"]::-webkit-slider-thumb {
   font-family: monospace;
 }
 
+/* ============ ACTIVITY SPEKTRUM ============ */
+.activity-spectrum-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.spectrum-panel, .donut-panel, .profile-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  overflow: hidden;
+}
+.spectrum-panel { flex: 1; min-width: 0; }
+.donut-panel { flex: 0 0 140px; width: 140px; }
+.profile-panel { flex: 0 0 200px; min-width: 0; }
+.spectrum-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.spectrum-canvas {
+  width: 100%;
+  height: 140px;
+  display: block;
+}
+.donut-canvas {
+  width: 100%;
+  height: 110px;
+  display: block;
+}
+.profile-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.profile-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.profile-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.profile-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.profile-stat-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.profile-section {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin: 6px 0 4px;
+  letter-spacing: 0.5px;
+}
+.profile-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+.profile-cat-icon { font-size: 12px; flex-shrink: 0; }
+.profile-cat-label { color: var(--text); width: 42px; flex-shrink: 0; font-size: 10px; }
+.profile-cat-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 0;
+}
+.profile-cat-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+.profile-cat-count { font-size: 10px; color: var(--text-muted); flex-shrink: 0; min-width: 18px; text-align: right; }
+.profile-action-row {
+  display: flex;
+  gap: 4px;
+  font-size: 10px;
+  margin-bottom: 2px;
+  overflow: hidden;
+}
+.profile-action-count { color: var(--accent); flex-shrink: 0; font-weight: 600; }
+.profile-action-text {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-summary {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-style: italic;
+}
+
+@media (max-width: 700px) {
+  .activity-spectrum-row { flex-direction: column; }
+  .donut-panel { flex: 1; width: 100%; }
+  .profile-panel { flex: 1; min-width: 0; }
+}
+
+/* ============ CHAT SAVE BADGES ============ */
+.save-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin: 4px 0;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  border: 1px solid;
+}
+.save-badge-memory {
+  background: rgba(255, 214, 10, 0.1);
+  border-color: rgba(255, 214, 10, 0.3);
+  color: #ffd60a;
+}
+.save-badge-skill {
+  background: rgba(48, 209, 88, 0.1);
+  border-color: rgba(48, 209, 88, 0.3);
+  color: #30d158;
+}
+.save-badge-action {
+  background: rgba(0, 113, 227, 0.1);
+  border-color: rgba(0, 113, 227, 0.3);
+  color: #0071e3;
+}
+.save-badge-icon { font-size: 14px; }
+.save-badge-text { flex: 1; }
+
 /* ============ MEMORY 3D GEHIRN ============ */
 .memory-brain-container {
   flex: 1;

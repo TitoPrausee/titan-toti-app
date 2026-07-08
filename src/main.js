@@ -672,6 +672,98 @@
   var lastActivityCount = 0;
   var currentActivityFilter = "";
 
+  // Activity-Kategorien fuer das Spektrum
+  var ACTIVITY_CATEGORIES = {
+    chat: { label: "Chat", color: "#0071e3", icon: "💬", types: ["thinking", "action"] },
+    skill: { label: "Skills", color: "#30d158", icon: "🔧", types: ["skill"] },
+    command: { label: "Befehl", color: "#ff9500", icon: "💻", types: ["command"] },
+    file: { label: "Datei", color: "#00d4ff", icon: "📁", types: ["file_read", "file_write"] },
+    error: { label: "Fehler", color: "#ff3b30", icon: "❌", types: ["error"] },
+    agent: { label: "Agent", color: "#bf5af2", icon: "🚀", types: ["agent_started", "agent_completed"] },
+    memory: { label: "Memory", color: "#ffd60a", icon: "💾", types: ["memory_saved"] }
+  };
+
+  // Nuterprofil aus localStorage laden
+  var userProfile = loadUserProfile();
+
+  function loadUserProfile() {
+    try {
+      var saved = localStorage.getItem("titan_user_profile");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      categoryCounts: {},
+      totalActivities: 0,
+      sessions: 0,
+      topActions: {},
+      lastSaved: 0
+    };
+  }
+
+  function saveUserProfile() {
+    try {
+      userProfile.lastSaved = Date.now();
+      localStorage.setItem("titan_user_profile", JSON.stringify(userProfile));
+    } catch (e) {}
+  }
+
+  // Baut Kontext-String fuer System-Prompt aus Nutzerprofil
+  function buildUserProfileContext() {
+    var counts = userProfile.categoryCounts || {};
+    var sortedCats = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
+    if (sortedCats.length === 0) return "";
+    var parts = [];
+    parts.push("Nutzerprofil (aus Activity-Historie gelernt):");
+    parts.push("- Sessions: " + (userProfile.sessions || 0));
+    parts.push("- Activities gesamt: " + (userProfile.totalActivities || 0));
+    var topCats = sortedCats.slice(0, 3).map(function(cat) {
+      var cfg = ACTIVITY_CATEGORIES[cat] || { label: cat };
+      var pct = Math.round((counts[cat] / userProfile.totalActivities) * 100);
+      return "  " + cfg.label + ": " + pct + "% (" + counts[cat] + ")";
+    });
+    parts.push("- Top-Kategorien: " + topCats.join(", "));
+    var topActions = userProfile.topActions || {};
+    var sortedActions = Object.keys(topActions).sort(function(a, b) { return topActions[b] - topActions[a]; });
+    if (sortedActions.length > 0) {
+      var top3 = sortedActions.slice(0, 3).map(function(a) { return a + " (" + topActions[a] + "x)"; });
+      parts.push("- Haeufigste Aktionen: " + top3.join(", "));
+    }
+    if (sortedCats.length > 0) {
+      var topCat = sortedCats[0];
+      var cfg = ACTIVITY_CATEGORIES[topCat] || { label: topCat };
+      parts.push("- Der Nutzer fragt meistens nach: " + cfg.label);
+    }
+    return parts.join("\n");
+  }
+
+  function categorizeActivity(type) {
+    for (var cat in ACTIVITY_CATEGORIES) {
+      if (ACTIVITY_CATEGORIES[cat].types.indexOf(type) >= 0) return cat;
+    }
+    return "chat";
+  }
+
+  function updateUserProfile(activities) {
+    var changed = false;
+    activities.forEach(function(a) {
+      var cat = categorizeActivity(a.type);
+      userProfile.categoryCounts[cat] = (userProfile.categoryCounts[cat] || 0) + 1;
+      userProfile.totalActivities++;
+      var msgShort = (a.message || a.type).substring(0, 80);
+      userProfile.topActions[msgShort] = (userProfile.topActions[msgShort] || 0) + 1;
+      changed = true;
+    });
+    if (changed) {
+      // Session-Zaehler beim ersten Activity dieser Session
+      var sessionKey = "titan_session_started";
+      if (!sessionStorage.getItem(sessionKey)) {
+        sessionStorage.setItem(sessionKey, "1");
+        userProfile.sessions = (userProfile.sessions || 0) + 1;
+      }
+      saveUserProfile();
+    }
+  }
+
   function startActivityPolling() {
     loadActivities();
     if (activityTimer) clearInterval(activityTimer);
@@ -690,6 +782,171 @@
     });
   }
 
+  // Berechne Kategorie-Verteilung
+  function computeCategoryStats(activities) {
+    var stats = {};
+    for (var cat in ACTIVITY_CATEGORIES) stats[cat] = 0;
+    activities.forEach(function(a) {
+      var cat = categorizeActivity(a.type);
+      stats[cat] = (stats[cat] || 0) + 1;
+    });
+    return stats;
+  }
+
+  // Zeichne das Spektrum als horizontale Balken mit Canvas
+  function renderActivitySpectrum(stats) {
+    var canvas = $("activitySpectrumCanvas");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    var cats = Object.keys(ACTIVITY_CATEGORIES);
+    var maxVal = 0;
+    cats.forEach(function(c) { if (stats[c] > maxVal) maxVal = stats[c]; });
+    if (maxVal === 0) maxVal = 1;
+
+    var barHeight = Math.max(12, (h - 8) / cats.length - 4);
+    var labelWidth = 70;
+    var barAreaX = labelWidth;
+    var barAreaW = w - labelWidth - 50;
+
+    cats.forEach(function(cat, i) {
+      var y = i * (barHeight + 4) + 4;
+      var val = stats[cat] || 0;
+      var barW = (val / maxVal) * barAreaW;
+      var cfg = ACTIVITY_CATEGORIES[cat];
+
+      // Label
+      ctx.fillStyle = cfg.color;
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(cfg.icon + " " + cfg.label, 2, y + barHeight / 2);
+
+      // Bar background
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.fillRect(barAreaX, y, barAreaW, barHeight);
+
+      // Bar fill
+      ctx.fillStyle = cfg.color;
+      ctx.fillRect(barAreaX, y, Math.max(barW, val > 0 ? 3 : 0), barHeight);
+
+      // Count
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.textAlign = "right";
+      ctx.fillText(String(val), w - 4, y + barHeight / 2);
+    });
+  }
+
+  // Zeichne ein Donut-Chart als Alternative (rechts neben den Balken)
+  function renderActivityDonut(stats) {
+    var canvas = $("activityDonutCanvas");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    var cats = Object.keys(ACTIVITY_CATEGORIES);
+    var total = 0;
+    cats.forEach(function(c) { total += stats[c] || 0; });
+    if (total === 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.3)";
+      ctx.font = "12px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Keine Daten", w / 2, h / 2);
+      return;
+    }
+
+    var cx = w / 2;
+    var cy = h / 2;
+    var radius = Math.min(w, h) / 2 - 6;
+    var innerRadius = radius * 0.55;
+
+    var angle = -Math.PI / 2;
+    cats.forEach(function(cat) {
+      var val = stats[cat] || 0;
+      if (val === 0) return;
+      var slice = (val / total) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, angle, angle + slice);
+      ctx.arc(cx, cy, innerRadius, angle + slice, angle, true);
+      ctx.closePath();
+      ctx.fillStyle = ACTIVITY_CATEGORIES[cat].color;
+      ctx.fill();
+      angle += slice;
+    });
+
+    // Center text
+    ctx.fillStyle = "#f5f5f7";
+    ctx.font = "bold 18px -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(total), cx, cy - 6);
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "10px -apple-system, sans-serif";
+    ctx.fillText("Total", cx, cy + 10);
+  }
+
+  // Nuterprofil-Panel rendern
+  function renderUserProfilePanel() {
+    var panel = $("userProfilePanel");
+    if (!panel) return;
+    var counts = userProfile.categoryCounts || {};
+    var sortedCats = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
+    var topActions = userProfile.topActions || {};
+    var sortedActions = Object.keys(topActions).sort(function(a, b) { return topActions[b] - topActions[a]; });
+
+    var html = '<div class="profile-header">Nutzerprofil</div>';
+    html += '<div class="profile-stats">';
+    html += '<div class="profile-stat"><span class="profile-stat-value">' + (userProfile.totalActivities || 0) + '</span><span class="profile-stat-label">Activities</span></div>';
+    html += '<div class="profile-stat"><span class="profile-stat-value">' + (userProfile.sessions || 0) + '</span><span class="profile-stat-label">Sessions</span></div>';
+    html += '<div class="profile-stat"><span class="profile-stat-value">' + sortedCats.length + '</span><span class="profile-stat-label">Kategorien</span></div>';
+    html += '</div>';
+
+    if (sortedCats.length > 0) {
+      html += '<div class="profile-section">Top-Kategorien</div>';
+      sortedCats.slice(0, 5).forEach(function(cat) {
+        var cfg = ACTIVITY_CATEGORIES[cat] || { icon: "", label: cat, color: "#888" };
+        var pct = Math.round((counts[cat] / userProfile.totalActivities) * 100);
+        html += '<div class="profile-cat-row">' +
+          '<span class="profile-cat-icon" style="color:' + cfg.color + '">' + cfg.icon + '</span>' +
+          '<span class="profile-cat-label">' + escapeHtml(cfg.label) + '</span>' +
+          '<div class="profile-cat-bar"><div class="profile-cat-fill" style="width:' + pct + '%;background:' + cfg.color + '"></div></div>' +
+          '<span class="profile-cat-count">' + counts[cat] + '</span>' +
+          '</div>';
+      });
+    }
+
+    if (sortedActions.length > 0) {
+      html += '<div class="profile-section">Haeufigste Aktionen</div>';
+      sortedActions.slice(0, 5).forEach(function(action) {
+        html += '<div class="profile-action-row">' +
+          '<span class="profile-action-count">' + topActions[action] + 'x</span>' +
+          '<span class="profile-action-text">' + escapeHtml(action) + '</span>' +
+          '</div>';
+      });
+    }
+
+    if (sortedCats.length > 0) {
+      var topCat = sortedCats[0];
+      var cfg = ACTIVITY_CATEGORIES[topCat] || { label: topCat };
+      html += '<div class="profile-summary">Der Nutzer fragt meistens nach: ' + escapeHtml(cfg.label) + '</div>';
+    }
+
+    panel.innerHTML = html;
+  }
+
   function loadActivities() {
     callBackend("get_activities", { limit: 200 }).then(function(result) {
       var activities = [];
@@ -697,6 +954,12 @@
         activities = typeof result === "string" ? JSON.parse(result) : result;
       } catch (e) { activities = []; }
       if (!Array.isArray(activities)) activities = [];
+
+      // Nuterprofil aktualisieren (nur neue Activities zaehlen)
+      if (activities.length > lastActivityCount) {
+        var newOnes = activities.slice(lastActivityCount);
+        updateUserProfile(newOnes);
+      }
 
       // Badge aktualisieren
       if (activities.length > 0) {
@@ -708,6 +971,14 @@
         }
         lastActivityCount = newCount;
       }
+
+      // Spektrum + Donut zeichnen
+      var stats = computeCategoryStats(activities);
+      renderActivitySpectrum(stats);
+      renderActivityDonut(stats);
+
+      // Nuterprofil-Panel aktualisieren
+      renderUserProfilePanel();
 
       // Filter
       var filtered = activities;
@@ -928,6 +1199,35 @@
     container.scrollTop = container.scrollHeight;
   }
 
+  // --- CHAT SAVE BADGES ---
+  function appendSaveBadge(type, text) {
+    var container = $("chatMessages");
+    var badge = document.createElement("div");
+    var badgeClass = "save-badge save-badge-" + (type === "memory" ? "memory" : type === "skill" ? "skill" : "action");
+    badge.className = badgeClass;
+    var icon = type === "memory" ? "💾" : type === "skill" ? "🔧" : "⚡";
+    badge.innerHTML = '<span class="save-badge-icon">' + icon + '</span>' +
+      '<span class="save-badge-text">' + escapeHtml(text) + '</span>';
+    container.appendChild(badge);
+    scrollToBottom();
+  }
+
+  // Hilfsfunktion: Memory speichern + Badge + Activity loggen
+  function saveMemoryWithBadge(key, value, tags) {
+    callBackend("memory_add_immediate", { key: key, value: value, tags: tags }).then(function() {
+      appendSaveBadge("memory", "Memory gespeichert: " + key);
+      callBackend("log_activity", { activityType: "memory_saved", message: "Memory: " + key + " = " + value.substring(0, 60), timestamp: String(Date.now()) }).catch(function() {});
+    }).catch(function() {});
+  }
+
+  // Hilfsfunktion: Skill lernen + Badge + Activity loggen
+  function learnSkillWithBadge(name, description, category, steps) {
+    callBackend("memory_add_skill", { name: name, description: description, category: category, steps: steps }).then(function() {
+      appendSaveBadge("skill", "Skill gelernt: " + name);
+      callBackend("log_activity", { activityType: "memory_saved", message: "Skill gelernt: " + name, timestamp: String(Date.now()) }).catch(function() {});
+    }).catch(function() {});
+  }
+
   // --- ACTIVITY BADGE ---
   function showChatActivity(text) {
     var badge = $("chatActivityBadge");
@@ -1083,6 +1383,9 @@
     var agentMessages = [];
     var sysContent = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
     if (sysContent.indexOf("[TOOL:") < 0) sysContent = DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    // Nuterprofil in System-Prompt einbauen
+    var profileContext = buildUserProfileContext();
+    if (profileContext) sysContent = sysContent + "\n\n" + profileContext;
     agentMessages.push({ role: "system", content: sysContent });
     var sessionMsgs = getSessionMessages();
     var recent = sessionMsgs.slice(-10);
@@ -1121,7 +1424,7 @@
         hideChatActivity();
         appendMessage("assistant", response, Date.now(), true);
         callBackend("memory_add_message", { sessionId: settings.currentSession, role: "assistant", content: response }).catch(function() {});
-        callBackend("memory_add_immediate", { key: "chat_assistant_" + Date.now(), value: response, tags: ["chat", "assistant"] }).catch(function() {});
+        saveMemoryWithBadge("chat_assistant_" + Date.now(), response, ["chat", "assistant"]);
         callBackend("log_activity", { activityType: "action", message: "Antwort gesendet" , timestamp: String(Date.now()) }).catch(function() {});
         return;
       }
@@ -1132,7 +1435,7 @@
       toolCalls.forEach(function(tc) {
         showChatActivity("Fuehre aus: " + tc.tool + " " + tc.args.join(" ").substring(0, 40));
         callBackend("log_activity", { activityType: "skill", message: "Tool: " + tc.tool + " " + tc.args.join(" ").substring(0, 60) , timestamp: String(Date.now()) }).catch(function() {});
-        callBackend("memory_add_immediate", { key: "tool_" + tc.tool + "_" + Date.now(), value: tc.tool + " " + tc.args.join(" "), tags: ["tool", "execution"] }).catch(function() {});
+        saveMemoryWithBadge("tool_" + tc.tool + "_" + Date.now(), tc.tool + " " + tc.args.join(" "), ["tool", "execution"]);
         executeTool(tc).then(function(result) {
           toolResults.push({ tool: tc.tool, args: tc.args, result: result, success: result.indexOf("FEHLER") !== 0 });
           pending--;
@@ -1462,10 +1765,22 @@
 
     // Three.js wurde via index.html <script type="module"> geladen.
     // Warte auf three-loaded Event falls noch nicht bereit.
-    if (window.THREE_LOADED) {
+    if (window.THREE_LOADED && window.THREE) {
       initBrainThree(canvas, width, height);
     } else {
+      var brainWaitTimeout = setTimeout(function() {
+        // Fallback: Falls Three.js nicht laedt (z.B. Module-Error), zeige Placeholder
+        if (!brainViewerInitialized) {
+          console.warn("Three.js Modul nicht geladen — verwende Placeholder");
+          if (window.THREE) {
+            initBrainThree(canvas, width, height);
+          } else {
+            $("brainLoading").textContent = "Three.js konnte nicht geladen werden.";
+          }
+        }
+      }, 5000);
       window.addEventListener("three-loaded", function() {
+        clearTimeout(brainWaitTimeout);
         initBrainThree(canvas, width, height);
       });
     }

@@ -9,11 +9,15 @@
   <!-- Three.js + Addons als ES-Module laden und als globale Variablen bereitstellen -->
   <script type="module">
     import * as THREE from './lib/three.module.js';
-    window.THREE = THREE;
     import { OrbitControls } from './lib/OrbitControls.js';
-    window.THREE.OrbitControls = OrbitControls;
     import { GLTFLoader } from './lib/GLTFLoader.js';
-    window.THREE.GLTFLoader = GLTFLoader;
+    // Module namespace objects are frozen/non-extensible in strict mode.
+    // Copy all exports into a plain extensible object so we can add OrbitControls/GLTFLoader.
+    var T = {};
+    Object.keys(THREE).forEach(function(k) { T[k] = THREE[k]; });
+    T.OrbitControls = OrbitControls;
+    T.GLTFLoader = GLTFLoader;
+    window.THREE = T;
     window.THREE_LOADED = true;
     window.dispatchEvent(new Event('three-loaded'));
   </script>
@@ -218,7 +222,7 @@
       <!-- ACTIVITY VIEW -->
       <section class="view" id="view-activity">
         <div class="view-header">
-          <h1>Activity Feed</h1>
+          <h1>Activity Spektrum</h1>
           <div class="chat-actions">
             <select id="activityFilter" class="session-select" title="Activity-Typ filtern">
               <option value="">Alle</option>
@@ -236,6 +240,21 @@
             <button class="btn-secondary" id="clearActivityBtn">Leeren</button>
           </div>
         </div>
+        <!-- SPEKTRUM + DONUT + NUTZERPROFIL -->
+        <div class="activity-spectrum-row">
+          <div class="spectrum-panel">
+            <div class="spectrum-title">Kategorie-Verteilung</div>
+            <canvas id="activitySpectrumCanvas" class="spectrum-canvas"></canvas>
+          </div>
+          <div class="donut-panel">
+            <div class="spectrum-title">Verteilung</div>
+            <canvas id="activityDonutCanvas" class="donut-canvas"></canvas>
+          </div>
+          <div class="profile-panel" id="userProfilePanel">
+            <div class="profile-header">Nutzerprofil</div>
+          </div>
+        </div>
+        <!-- ACTIVITY LISTE -->
         <div class="activity-list" id="activityList">
           <div class="empty-state"><p>Lade Activities...</p></div>
         </div>
