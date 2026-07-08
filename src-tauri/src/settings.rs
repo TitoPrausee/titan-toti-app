@@ -8,6 +8,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+fn default_true() -> bool { true }
+fn default_language() -> String { "de".to_string() }
+
+
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
     pub api_url: String,
@@ -20,6 +25,14 @@ pub struct Settings {
     pub auto_screenshot: bool,
     pub continuous_mode: bool,
     pub theme: String,
+    #[serde(default = "default_true")]
+    pub auto_learn: bool,
+    #[serde(default = "default_true")]
+    pub auto_skill_creation: bool,
+    #[serde(default = "default_true")]
+    pub memory_auto_flow: bool,
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -35,6 +48,10 @@ impl Default for Settings {
             auto_screenshot: false,
             continuous_mode: false,
             theme: "dark".to_string(),
+            auto_learn: true,
+            auto_skill_creation: true,
+            memory_auto_flow: true,
+            language: "de".to_string(),
         }
     }
 }
@@ -110,6 +127,10 @@ pub fn set_setting_cmd(key: String, value: String) -> Result<bool, String> {
             "auto_screenshot" => s.auto_screenshot = value == "true" || value == "1",
             "continuous_mode" => s.continuous_mode = value == "true" || value == "1",
             "theme" => s.theme = value,
+            "auto_learn" => s.auto_learn = value == "true" || value == "1",
+            "auto_skill_creation" => s.auto_skill_creation = value == "true" || value == "1",
+            "memory_auto_flow" => s.memory_auto_flow = value == "true" || value == "1",
+            "language" => s.language = value,
             _ => return Err(format!("Unbekanntes Setting: {}", key)),
         }
         persist(s);

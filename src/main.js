@@ -691,7 +691,7 @@
   }
 
   function loadActivities() {
-    callBackend("get_activities", {}).then(function(result) {
+    callBackend("get_activities", { limit: 200 }).then(function(result) {
       var activities = [];
       try {
         activities = typeof result === "string" ? JSON.parse(result) : result;
@@ -1025,7 +1025,7 @@
       hideChatActivity();
       var analysis = typeof result === "string" ? result : (result && result.description ? result.description : JSON.stringify(result));
       appendMessage("titan", analysis, Date.now(), true);
-      callBackend("log_activity", { type: "action", message: "Bild analysiert" }).catch(function() {});
+      callBackend("log_activity", { activityType: "action", message: "Bild analysiert" , timestamp: String(Date.now()) }).catch(function() {});
     }).catch(function(err) {
       hideChatActivity();
       appendMessage("titan", "Vision-Fehler: " + err, Date.now(), true);
@@ -1067,7 +1067,7 @@
 
     callBackend("memory_add_message", { sessionId: settings.currentSession, role: "user", content: userMsg }).catch(function() {});
     callBackend("memory_add_immediate", { key: "chat_user_" + Date.now(), value: userMsg, tags: ["chat", "user"] }).catch(function() {});
-    callBackend("log_activity", { type: "thinking", message: "Nachricht empfangen" }).catch(function() {});
+    callBackend("log_activity", { activityType: "thinking", message: "Nachricht empfangen" , timestamp: String(Date.now()) }).catch(function() {});
 
     input.value = "";
     input.style.height = "auto";
@@ -1122,7 +1122,7 @@
         appendMessage("assistant", response, Date.now(), true);
         callBackend("memory_add_message", { sessionId: settings.currentSession, role: "assistant", content: response }).catch(function() {});
         callBackend("memory_add_immediate", { key: "chat_assistant_" + Date.now(), value: response, tags: ["chat", "assistant"] }).catch(function() {});
-        callBackend("log_activity", { type: "action", message: "Antwort gesendet" }).catch(function() {});
+        callBackend("log_activity", { activityType: "action", message: "Antwort gesendet" , timestamp: String(Date.now()) }).catch(function() {});
         return;
       }
 
@@ -1131,7 +1131,7 @@
       var pending = toolCalls.length;
       toolCalls.forEach(function(tc) {
         showChatActivity("Fuehre aus: " + tc.tool + " " + tc.args.join(" ").substring(0, 40));
-        callBackend("log_activity", { type: "skill", message: "Tool: " + tc.tool + " " + tc.args.join(" ").substring(0, 60) }).catch(function() {});
+        callBackend("log_activity", { activityType: "skill", message: "Tool: " + tc.tool + " " + tc.args.join(" ").substring(0, 60) , timestamp: String(Date.now()) }).catch(function() {});
         callBackend("memory_add_immediate", { key: "tool_" + tc.tool + "_" + Date.now(), value: tc.tool + " " + tc.args.join(" "), tags: ["tool", "execution"] }).catch(function() {});
         executeTool(tc).then(function(result) {
           toolResults.push({ tool: tc.tool, args: tc.args, result: result, success: result.indexOf("FEHLER") !== 0 });
@@ -1161,7 +1161,7 @@
       hideChatActivity();
       appendMessage("assistant", "Fehler: " + err, Date.now(), true);
       callBackend("memory_add_immediate", { key: "chat_error_" + Date.now(), value: "Fehler: " + err, tags: ["chat", "error"] }).catch(function() {});
-      callBackend("log_activity", { type: "error", message: "Chat-Fehler: " + err }).catch(function() {});
+      callBackend("log_activity", { activityType: "error", message: "Chat-Fehler: " + err , timestamp: String(Date.now()) }).catch(function() {});
     });
   }
 
@@ -1283,7 +1283,7 @@
           var res = typeof result === "string" ? result : JSON.stringify(result, null, 2);
           appendMessage("assistant", "Befehl ausgefuehrt:\n\n```\n" + res + "\n```", Date.now(), true);
           callBackend("memory_add_immediate", { key: "cmd_result_" + Date.now(), value: "Befehl: " + cmd + " -> " + res.substring(0, 200), tags: ["command", "result"] }).catch(function() {});
-          callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
+          callBackend("log_activity", { activityType: "command", message: cmd , timestamp: String(Date.now()) }).catch(function() {});
         }).catch(function(err) {
           hideChatActivity();
           appendMessage("assistant", "Befehl-Fehler: " + err, Date.now(), true);
@@ -1299,7 +1299,7 @@
           var truncated = content.length > 5000 ? content.substring(0, 5000) + "\n... (gekuerzt)" : content;
           appendMessage("assistant", "Datei: " + filePath + "\n\n```\n" + truncated + "\n```", Date.now(), true);
           callBackend("memory_add_immediate", { key: "file_read_" + Date.now(), value: "Datei: " + filePath, tags: ["file", "read"] }).catch(function() {});
-          callBackend("log_activity", { type: "file_read", message: filePath }).catch(function() {});
+          callBackend("log_activity", { activityType: "file_read", message: filePath , timestamp: String(Date.now()) }).catch(function() {});
         }).catch(function(err) {
           hideChatActivity();
           appendMessage("assistant", "Datei-Fehler: " + err, Date.now(), true);
@@ -2002,7 +2002,7 @@
         var zc = ZONE_CONFIG[zone];
         if (!zc) return;
         showConfirm("Loeschen", "Eintrag wirklich loeschen?", function() {
-          var delArgs = zc.zoneParam ? { zone: zc.zoneParam, key: id } : { key: id };
+          var delArgs = zc.zoneParam ? { zone: zc.zoneParam, key: id } : { entryId: id };
           callBackend(zc.deleteCmd, delArgs).then(function() {
             loadMemoryZone(zone);
             updateFlowStats();
@@ -2043,10 +2043,19 @@
       if (!key || !value) return;
       var zc = ZONE_CONFIG[memoryEditZone];
       if (!zc) return;
-      var args = { key: key, value: value, tags: tags };
-      if (zc.zoneParam) args.zone = zc.zoneParam;
+      var tagArr = tags ? tags.split(",").map(function(t) { return t.trim(); }).filter(Boolean) : [];
       var cmd = memoryEditId ? zc.editCmd : zc.addCmd;
-      if (memoryEditId) args.id = memoryEditId;
+      var args;
+      if (memoryEditZone === "sensitive" && memoryEditId) {
+        args = { entryId: memoryEditId, fields: JSON.stringify({ title: key, value: value, tags: tagArr }) };
+      } else if (memoryEditZone === "sensitive" && !memoryEditId) {
+        args = { entryType: "general", title: key, username: "", value: value, url: "", email: "", group: "Sonstige", tags: tagArr };
+      } else {
+        args = { key: key, value: value, tags: tagArr };
+        if (zc.zoneParam) args.zone = zc.zoneParam;
+        if (memoryEditId) args.entryId = memoryEditId;
+        if (memoryEditZone === "core" && !memoryEditId) args.entryType = "general";
+      }
       callBackend(cmd, args).then(function() {
         closeModal("memoryEditBackdrop", "memoryEditModal");
         loadMemoryZone(memoryEditZone);
@@ -2162,7 +2171,7 @@
       });
       $("skillExecuteBtn").disabled = true;
       $("skillExecuteBtn").textContent = "Fuehre aus...";
-      callBackend("execute_skill", { skillName: currentSkill.name, params: params }).then(function(result) {
+      callBackend("execute_skill", { skillName: currentSkill.name, args: params }).then(function(result) {
         $("skillExecuteBtn").disabled = false;
         $("skillExecuteBtn").textContent = "Ausfuehren";
         $("skillResultArea").style.display = "block";
@@ -2414,7 +2423,7 @@
           callBackend("password_manager_delete", { id: id }).then(function() {
             loadPasswords();
           }).catch(function() {
-            callBackend("memory_delete_sensitive", { key: id }).then(function() { loadPasswords(); }).catch(function() {});
+            callBackend("memory_delete_sensitive", { entryId: id }).then(function() { loadPasswords(); }).catch(function() {});
           });
           closeModal("confirmBackdrop", "confirmModal");
         });
@@ -2472,7 +2481,7 @@
           loadPasswords();
         }).catch(function() {
           // Fallback: memory_edit_sensitive
-          callBackend("memory_edit_sensitive", { key: pwEditId, value: JSON.stringify(data) }).then(function() {
+          callBackend("memory_edit_sensitive", { entryId: pwEditId, fields: JSON.stringify(data) }).then(function() {
             closeModal("pwEditBackdrop", "pwEditModal");
             loadPasswords();
           }).catch(function(err) { alert("Fehler: " + err); });
@@ -2483,7 +2492,7 @@
           loadPasswords();
         }).catch(function() {
           // Fallback
-          callBackend("memory_add_sensitive", { key: data.title, value: JSON.stringify(data) }).then(function() {
+          callBackend("memory_add_sensitive", { entryType: "password", title: data.title, username: data.username || "", value: data.value, url: data.url || "", email: data.email || "", group: data.group || "Passwoerter", tags: [] }).then(function() {
             closeModal("pwEditBackdrop", "pwEditModal");
             loadPasswords();
           }).catch(function(err) { alert("Fehler: " + err); });
@@ -2514,10 +2523,10 @@
       var task = $("agentTaskInput").value.trim();
       if (!task) return;
       var model = $("agentModelInput").value.trim() || null;
-      callBackend("spawn_agent", { task: task, model: model }).then(function(result) {
+      callBackend("spawn_agent", { task: task, context: "" }).then(function(result) {
         var agentId = typeof result === "string" ? result : (result && result.id ? result.id : "unknown");
         appendMessage("titan", "Agent gestartet (ID: " + agentId + ")\nAufgabe: " + task, Date.now(), true);
-        callBackend("log_activity", { type: "agent_started", message: task.substring(0, 80) }).catch(function() {});
+        callBackend("log_activity", { activityType: "agent_started", message: task.substring(0, 80) , timestamp: String(Date.now()) }).catch(function() {});
         closeModal("agentModalBackdrop", "agentModal");
         $("agentTaskInput").value = "";
         $("agentModelInput").value = "";

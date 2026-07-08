@@ -555,6 +555,73 @@ async fn memory_clear_zone(zone: String) -> Result<bool, String> {
 }
 
 // ============================================================================
+// FEATURE 7b: 3-TIER MEMORY FLOW (Immediate -> Short-Term -> Long-Term)
+// ============================================================================
+
+#[tauri::command]
+async fn memory_add_immediate(key: String, value: String, tags: Vec<String>) -> Result<bool, String> {
+    memory::add_immediate(&key, &value, tags)
+}
+
+#[tauri::command]
+async fn memory_get_immediate() -> Result<String, String> {
+    memory::get_immediate_json()
+}
+
+#[tauri::command]
+async fn memory_get_shortterm() -> Result<String, String> {
+    memory::get_shortterm_json()
+}
+
+#[tauri::command]
+async fn memory_promote(entry_id: String, from_zone: String, to_zone: String) -> Result<bool, String> {
+    log_act("memory_flow", &format!("Promote: {} -> {} -> {}", entry_id, from_zone, to_zone));
+    memory::promote(&entry_id, &from_zone, &to_zone)
+}
+
+#[tauri::command]
+async fn memory_auto_cleanup() -> Result<String, String> {
+    let result = memory::auto_cleanup()?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize-Fehler: {}", e))
+}
+
+#[tauri::command]
+async fn memory_flow() -> Result<String, String> {
+    let result = memory::flow()?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize-Fehler: {}", e))
+}
+
+#[tauri::command]
+async fn memory_status() -> Result<String, String> {
+    memory::get_status_json()
+}
+
+#[tauri::command]
+async fn memory_increment_reference(zone: String, entry_id: String) -> Result<bool, String> {
+    memory::increment_reference(&zone, &entry_id)
+}
+
+#[tauri::command]
+async fn memory_add_to_zone(zone: String, key: String, value: String, tags: Vec<String>) -> Result<bool, String> {
+    memory::add_to_zone(&zone, &key, &value, tags)
+}
+
+#[tauri::command]
+async fn memory_search_zone(zone: String, query: String) -> Result<String, String> {
+    memory::search_zone(&zone, &query)
+}
+
+#[tauri::command]
+async fn memory_delete_from_zone(zone: String, key: String) -> Result<bool, String> {
+    memory::delete_from_zone(&zone, &key)
+}
+
+#[tauri::command]
+async fn memory_edit_in_zone(zone: String, id: String, key: String, value: String, tags: Vec<String>) -> Result<bool, String> {
+    memory::edit_in_zone(&zone, &id, &key, &value, tags)
+}
+
+// ============================================================================
 // FEATURE 8: PASSWORD MANAGER
 // ============================================================================
 
@@ -618,6 +685,14 @@ async fn get_skill_details(skill_name: String) -> Result<String, String> {
 async fn execute_skill(skill_name: String, args: Vec<String>) -> Result<String, String> {
     log_act("skill", &format!("Skill ausgefuehrt: {}", skill_name));
     skills::execute_skill(&skill_name, &args, true).await
+}
+
+#[tauri::command]
+async fn add_custom_skill(name: String, description: String, command: String) -> Result<bool, String> {
+    let steps = vec![command];
+    let ok = memory::add_skill(&name, &description, "custom", steps)?;
+    log_act("skill", &format!("Custom Skill hinzugefuegt: {}", name));
+    Ok(ok)
 }
 
 // ============================================================================
@@ -1067,6 +1142,11 @@ fn open_url_nonblocking(app: &tauri::AppHandle, url: &str) -> Result<bool, Strin
     }
 }
 
+#[tauri::command]
+async fn check_for_updates() -> Result<String, String> {
+    update::check_github_release().await
+}
+
 // ============================================================================
 // APP ENTRY POINT
 // ============================================================================
@@ -1136,6 +1216,19 @@ pub fn run() {
             memory_get_zone,
             memory_get_all,
             memory_clear_zone,
+            // 3-Tier Memory Flow
+            memory_add_immediate,
+            memory_get_immediate,
+            memory_get_shortterm,
+            memory_promote,
+            memory_auto_cleanup,
+            memory_flow,
+            memory_status,
+            memory_increment_reference,
+            memory_add_to_zone,
+            memory_search_zone,
+            memory_delete_from_zone,
+            memory_edit_in_zone,
             // Password Manager
             password_manager_list,
             password_manager_search,
@@ -1149,6 +1242,7 @@ pub fn run() {
             list_skills,
             get_skill_details,
             execute_skill,
+            add_custom_skill,
             // Legacy
             skills_match,
             skills_execute,
@@ -1162,6 +1256,7 @@ pub fn run() {
             check_auth_status,
             stop_auth,
             // Update
+            check_for_updates,
             update::check_github_release,
             update::download_update,
             update::install_update,
