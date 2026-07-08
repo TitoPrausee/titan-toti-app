@@ -40,7 +40,7 @@
     theme: "dark"
   };
 
-  var DEFAULT_SYSTEM_PROMPT_FALLBACK = "Du bist Titan Toti — ein lokaler KI-Assistent auf macOS. Du kannst auf das System zugreifen, Dateien lesen/schreiben, Commands ausfuehren und dem Nutzer helfen. Du sprichst Deutsch.";
+  var DEFAULT_SYSTEM_PROMPT_FALLBACK = "Du bist Titan Toti \u2014 ein autonomer KI-Agent auf macOS. Du erreichst Ziele SELBSTSTAENDIG durch Nachdenken und Ausprobieren.\n\nDu hast folgende Tools zur Verfuegung:\n- [TOOL:system_command:BEFEHL,ARG1,ARG2,...] \u2014 Fuehrt einen System-Befehl aus (z.B. [TOOL:system_command:open,https://google.com])\n- [TOOL:read_file:PFAD] \u2014 Liest eine Datei\n- [TOOL:write_file:PFAD,INHALT] \u2014 Schreibt eine Datei\n- [TOOL:list_dir:PFAD] \u2014 Listet ein Verzeichnis\n- [TOOL:screenshot:] \u2014 Macht einen Screenshot\n\nREGELN:\n1. Ueberlege zuerst was zu tun ist, dann nutze ein Tool.\n2. Wenn ein Tool fehlschlaegt, probiere einen ANDEREN Weg. Gib nicht auf.\n3. Du kannst MEHRERE Tools nacheinander nutzen bis du am Ziel bist.\n4. Wenn du fertig bist, schreibe eine normale Antwort OHNE Tool-Aufruf.\n5. Du sprichst Deutsch. Du bist kurz und auf den Punkt.\n6. Probier IMMER selbststaendig zu loesen, bevor du den Nutzer fragst.\n\nBEISPIEL: Nutzer sagt oeffne google.com -> Du antwortest [TOOL:system_command:open,https://www.google.com] -> nach Resultat: Google.com wurde geoeffnet.";
 
   function getSetting(key, fallback) {
     var val = localStorage.getItem(key);
@@ -96,68 +96,6 @@
       return invoke(cmd, args || {});
     }
     return Promise.reject("Tauri nicht verfuegbar");
-  }
-
-  // Parst einen Befehls-String in command + args (mit Quote-Handling)
-  function parseCommand(cmdStr) {
-    var parts = [];
-    var current = "";
-    var inQuote = false;
-    var quoteChar = "";
-    for (var i = 0; i < cmdStr.length; i++) {
-      var ch = cmdStr[i];
-      if (inQuote) {
-        if (ch === quoteChar) { inQuote = false; }
-        else { current += ch; }
-      } else if (ch === '"' || ch === "'") {
-        inQuote = true;
-        quoteChar = ch;
-      } else if (ch === " " || ch === "\t") {
-        if (current.length > 0) { parts.push(current); current = ""; }
-      } else {
-        current += ch;
-      }
-    }
-    if (current.length > 0) { parts.push(current); }
-    return parts;
-  }
-
-  // Fuehrt einen Befehl aus und gibt formatiertes HTML zurueck
-  function executeSystemCommand(cmdStr) {
-    var parts = parseCommand(cmdStr);
-    if (parts.length === 0) {
-      return Promise.reject("Kein Befehl angegeben");
-    }
-    return callBackend("execute_command", { command: parts[0], args: parts.slice(1), cwd: null }).then(function(result) {
-      var res;
-      try {
-        res = typeof result === "string" ? JSON.parse(result) : result;
-      } catch (e) {
-        res = { stdout: String(result) };
-      }
-      if (res && res.requires_approval) {
-        return "Befehl erfordert Freigabe: " + escapeHtml(res.command || cmdStr);
-      }
-      var html = "<p><strong>Befehl ausgefuehrt:</strong> " + escapeHtml(cmdStr) + "</p>";
-      if (res && res.stdout && res.stdout.trim()) {
-        html += '<div class="code-block"><div class="code-block-header"><span>stdout</span></div><pre>' + escapeHtml(res.stdout) + "</pre></div>";
-      }
-      if (res && res.stderr && res.stderr.trim()) {
-        html += '<div class="code-block"><div class="code-block-header"><span style="color:#ff6b6b">stderr</span></div><pre style="color:#ff6b6b">' + escapeHtml(res.stderr) + "</pre></div>";
-      }
-      if (res && typeof res.exit_code !== "undefined") {
-        var exitColor = res.exit_code === 0 ? "#51cf66" : "#ff6b6b";
-        html += '<p style="margin-top:6px">Exit-Code: <strong style="color:' + exitColor + '">' + res.exit_code + "</strong>";
-        if (res.duration_ms) {
-          html += " | Dauer: " + res.duration_ms + "ms";
-        }
-        html += "</p>";
-      }
-      if (!res || (!res.stdout && !res.stderr && typeof res.exit_code === "undefined")) {
-        html += "<p>Keine Ausgabe</p>";
-      }
-      return html;
-    });
   }
 
   // --- DOM HELPERS ---
@@ -248,10 +186,7 @@
     html = html.replace(/@@CODEBLOCK_(\d+)@@/g, function(match, idx) {
       var block = codeBlocks[parseInt(idx, 10)];
       if (!block) return match;
-      var lang = block.lang.toLowerCase();
-      var isShell = lang === "bash" || lang === "sh" || lang === "shell" || lang === "zsh" || lang === "shell session" || lang === "console" || lang === "terminal";
-      var execBtn = isShell ? ' <button class="exec-btn" data-cmd="' + encodeURIComponent(block.code) + '">Ausfuehren</button>' : '';
-      return '<div class="code-block"><div class="code-block-header"><span>' + escapeHtml(block.lang) + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button>' + execBtn + '</div><pre>' + escapeHtml(block.code) + '</pre></div>';
+      return '<div class="code-block"><div class="code-block-header"><span>' + escapeHtml(block.lang) + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button></div><pre>' + escapeHtml(block.code) + '</pre></div>';
     });
     return html;
   }
@@ -632,6 +567,10 @@
 
     updateSessionSelect();
     loadChatFromMemory();
+    // Auto-Cleanup beim App-Start (abgelaufene Immediate + Short-Term Eintraege)
+    callBackend("memory_auto_cleanup", {}).then(function() {
+      callBackend("memory_flow", {}).catch(function() {});
+    }).catch(function() {});
     startStatusTimer();
     startActivityPolling();
     startAgentPolling();
@@ -695,7 +634,7 @@
     $("view-" + view).classList.add("active");
     var navBtn = document.querySelector('.nav-item[data-view="' + view + '"]');
     if (navBtn) navBtn.classList.add("active");
-    if (view === "memory") { initBrainViewer(); loadMemoryZone("core"); }
+    if (view === "memory") { initBrainViewer(); loadMemoryZone("immediate"); updateFlowStats(); }
     if (view === "skills") loadSkills();
     if (view === "passwords") loadPasswords();
     if (view === "activity") loadActivities();
@@ -982,31 +921,6 @@
         });
       });
     });
-    body.querySelectorAll(".exec-btn").forEach(function(btn) {
-      btn.addEventListener("click", function() {
-        var cmdText = decodeURIComponent(btn.getAttribute("data-cmd")).trim();
-        // Multi-line: take all non-empty lines, join with ; for sequential execution
-        var lines = cmdText.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0 && l[0] !== "#"; });
-        var cmd = lines.join("; ");
-        if (!cmd) return;
-        btn.textContent = "Laedt...";
-        btn.disabled = true;
-        appendMessage("user", "/cmd " + cmd, Date.now(), true);
-        showChatActivity("Fuehre Befehl aus...");
-        executeSystemCommand(cmd).then(function(resultHtml) {
-          hideChatActivity();
-          appendMessage("assistant", resultHtml, Date.now(), true);
-          callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
-          btn.textContent = "Ausfuehren";
-          btn.disabled = false;
-        }).catch(function(err) {
-          hideChatActivity();
-          appendMessage("assistant", "Befehl-Fehler: " + err, Date.now(), true);
-          btn.textContent = "Ausfuehren";
-          btn.disabled = false;
-        });
-      });
-    });
   }
 
   function scrollToBottom() {
@@ -1136,7 +1050,6 @@
       setSetting(STORAGE_KEYS.currentSession, settings.currentSession);
     }
 
-    // Attached files
     var fileContext = "";
     if (attachedFiles.length > 0) {
       fileContext = "\n\n[Angehaengte Dateien:\n";
@@ -1146,16 +1059,14 @@
 
     var ts = Date.now();
     var userMsg = text + fileContext;
-    appendMessage("user", text + (fileContext ? "\n\n📎 " + attachedFiles.length + " Datei(en) angehaengt" : ""), ts, true);
+    appendMessage("user", text + (fileContext ? "\n\n\u{1F4CE} " + attachedFiles.length + " Datei(en) angehaengt" : ""), ts, true);
 
-    // Bilder analysieren
     if (attachedImages.length > 0) {
-      attachedImages.forEach(function(img) {
-        analyzeImageInternal(img.path);
-      });
+      attachedImages.forEach(function(img) { analyzeImageInternal(img.path); });
     }
 
     callBackend("memory_add_message", { sessionId: settings.currentSession, role: "user", content: userMsg }).catch(function() {});
+    callBackend("memory_add_immediate", { key: "chat_user_" + Date.now(), value: userMsg, tags: ["chat", "user"] }).catch(function() {});
     callBackend("log_activity", { type: "thinking", message: "Nachricht empfangen" }).catch(function() {});
 
     input.value = "";
@@ -1168,63 +1079,148 @@
     showChatActivity("Titan denkt nach...");
     scrollToBottom();
 
-    // Skill-Matching (falls verfuegbar)
-    var skillPromise = Promise.resolve(null);
-    if (settings.skillsEnabled) {
-      skillPromise = callBackend("skills_match", { message: text, systemAccess: settings.systemAccess }).then(function(resultStr) {
-        try {
-          var skillResult = JSON.parse(resultStr);
-          if (skillResult.matched) return skillResult;
-        } catch (e) {}
-        return null;
-      }).catch(function() { return null; });
+    // === AGENT LOOP ===
+    var agentMessages = [];
+    var sysContent = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    if (sysContent.indexOf("[TOOL:") < 0) sysContent = DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    agentMessages.push({ role: "system", content: sysContent });
+    var sessionMsgs = getSessionMessages();
+    var recent = sessionMsgs.slice(-10);
+    recent.forEach(function(m) {
+      agentMessages.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
+    });
+    agentMessages.push({ role: "user", content: userMsg });
+
+    runAgentLoop(agentMessages, 0);
+  }
+
+  function runAgentLoop(messages, depth) {
+    var MAX_ITERATIONS = 10;
+    if (depth >= MAX_ITERATIONS) {
+      $("typingIndicator").style.display = "none";
+      hideChatActivity();
+      appendMessage("assistant", "Ich habe zu viele Schritte gebraucht und breche hier ab. Was soll ich tun?", Date.now(), true);
+      return;
     }
 
-    skillPromise.then(function(skillResult) {
-      if (skillResult) {
-        appendMessage("assistant", "", Date.now(), true, skillResult);
-        callBackend("log_activity", { type: "skill", message: "Skill ausgefuehrt: " + skillResult.skill_name }).catch(function() {});
-      }
+    showChatActivity(depth === 0 ? "Titan denkt nach..." : "Titan fuehrt aus (Schritt " + (depth + 1) + ")...");
+    callBackend("ollama_chat", {
+      apiUrl: settings.apiUrl,
+      apiKey: settings.apiKey,
+      model: settings.model,
+      messages: messages,
+      temperature: settings.temperature,
+      maxTokens: Math.round(settings.maxTokens),
+      fallbackModels: parseFallbackModels(settings.fallbackModels)
+    }).then(function(response) {
+      var toolCalls = parseToolCalls(response);
 
-      var messages = buildLLMMessages(text, skillResult, attachedFiles);
-      showChatActivity("Titan antwortet...");
-      callBackend("ollama_chat", {
-        apiUrl: settings.apiUrl,
-        apiKey: settings.apiKey,
-        model: settings.model,
-        messages: messages,
-        temperature: settings.temperature,
-        maxTokens: Math.round(settings.maxTokens),
-        fallbackModels: parseFallbackModels(settings.fallbackModels)
-      }).then(function(response) {
+      if (toolCalls.length === 0) {
+        // No tools = final answer
         $("typingIndicator").style.display = "none";
         hideChatActivity();
         appendMessage("assistant", response, Date.now(), true);
         callBackend("memory_add_message", { sessionId: settings.currentSession, role: "assistant", content: response }).catch(function() {});
+        callBackend("memory_add_immediate", { key: "chat_assistant_" + Date.now(), value: response, tags: ["chat", "assistant"] }).catch(function() {});
         callBackend("log_activity", { type: "action", message: "Antwort gesendet" }).catch(function() {});
-      }).catch(function(err) {
-        $("typingIndicator").style.display = "none";
-        hideChatActivity();
-        var errText = "Fehler: " + err;
-        if (skillResult) errText = "LLM nicht erreichbar. Skill wurde jedoch ausgefuehrt.\n\nFehler: " + err;
-        appendMessage("assistant", errText, Date.now(), true);
-        callBackend("log_activity", { type: "error", message: "Chat-Fehler: " + err }).catch(function() {});
+        return;
+      }
+
+      // Execute all tool calls
+      var toolResults = [];
+      var pending = toolCalls.length;
+      toolCalls.forEach(function(tc) {
+        showChatActivity("Fuehre aus: " + tc.tool + " " + tc.args.join(" ").substring(0, 40));
+        callBackend("log_activity", { type: "skill", message: "Tool: " + tc.tool + " " + tc.args.join(" ").substring(0, 60) }).catch(function() {});
+        callBackend("memory_add_immediate", { key: "tool_" + tc.tool + "_" + Date.now(), value: tc.tool + " " + tc.args.join(" "), tags: ["tool", "execution"] }).catch(function() {});
+        executeTool(tc).then(function(result) {
+          toolResults.push({ tool: tc.tool, args: tc.args, result: result, success: result.indexOf("FEHLER") !== 0 });
+          pending--;
+          if (pending === 0) {
+            // Add assistant response to messages
+            messages.push({ role: "assistant", content: response });
+            // Add tool results
+            var resultSummary = "Tool-Ergebnisse:\n";
+            toolResults.forEach(function(r) {
+              resultSummary += "[" + r.tool + " " + r.args.join(",") + "] -> " + (r.success ? "OK" : "FEHLER") + ": " + r.result.substring(0, 500) + "\n";
+            });
+            resultSummary += "\nNutze diese Ergebnisse um weiterzumachen oder dem Nutzer zu antworten.";
+            messages.push({ role: "system", content: resultSummary });
+            // Show tool execution to user
+            toolResults.forEach(function(r) {
+              var badge = { matched: true, skill_name: r.tool + " " + r.args.join(" ").substring(0, 30), result: r.result, success: r.success };
+              appendMessage("assistant", "", Date.now(), true, badge);
+            });
+            // Continue loop
+            runAgentLoop(messages, depth + 1);
+          }
+        });
       });
+    }).catch(function(err) {
+      $("typingIndicator").style.display = "none";
+      hideChatActivity();
+      appendMessage("assistant", "Fehler: " + err, Date.now(), true);
+      callBackend("memory_add_immediate", { key: "chat_error_" + Date.now(), value: "Fehler: " + err, tags: ["chat", "error"] }).catch(function() {});
+      callBackend("log_activity", { type: "error", message: "Chat-Fehler: " + err }).catch(function() {});
+    });
+  }
+
+  function parseToolCalls(text) {
+    var calls = [];
+    var regex = /\[TOOL:(\w+):([^\]]+)\]/g;
+    var match;
+    while ((match = regex.exec(text)) !== null) {
+      var tool = match[1];
+      var argsStr = match[2];
+      var args = argsStr.split(",").map(function(s) { return s.trim(); });
+      calls.push({ tool: tool, args: args });
+    }
+    return calls;
+  }
+
+  function executeTool(tc) {
+    return new Promise(function(resolve) {
+      if (tc.tool === "system_command") {
+        if (!settings.systemAccess) { resolve("FEHLER: System-Zugriff deaktiviert"); return; }
+        var cmd = tc.args[0];
+        var cmdArgs = tc.args.slice(1);
+        callBackend("system_command", { command: cmd, args: cmdArgs }).then(function(result) {
+          resolve(result || "OK (keine Ausgabe)");
+        }).catch(function(e) { resolve("FEHLER: " + e); });
+      } else if (tc.tool === "read_file") {
+        callBackend("read_file", { path: tc.args[0] }).then(function(result) {
+          resolve(result);
+        }).catch(function(e) { resolve("FEHLER: " + e); });
+      } else if (tc.tool === "write_file") {
+        var wpath = tc.args[0];
+        var wcontent = tc.args.slice(1).join(",");
+        callBackend("write_file", { path: wpath, content: wcontent }).then(function(ok) {
+          resolve(ok ? "Datei geschrieben: " + wpath : "FEHLER beim Schreiben");
+        }).catch(function(e) { resolve("FEHLER: " + e); });
+      } else if (tc.tool === "list_dir") {
+        callBackend("list_dir", { path: tc.args[0] }).then(function(result) {
+          resolve(Array.isArray(result) ? result.join("\n") : String(result));
+        }).catch(function(e) { resolve("FEHLER: " + e); });
+      } else if (tc.tool === "screenshot") {
+        callBackend("screenshot", {}).then(function(result) {
+          resolve(result || "Screenshot gespeichert");
+        }).catch(function(e) { resolve("FEHLER: " + e); });
+      } else {
+        resolve("FEHLER: Unbekanntes Tool: " + tc.tool);
+      }
     });
   }
 
   function buildLLMMessages(userText, skillResult, files) {
     var msgs = [];
     var sysContent = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT_FALLBACK;
+    if (sysContent.indexOf("[TOOL:") < 0) sysContent = DEFAULT_SYSTEM_PROMPT_FALLBACK;
     msgs.push({ role: "system", content: sysContent });
     var sessionMsgs = getSessionMessages();
-    var recent = sessionMsgs.slice(-20);
+    var recent = sessionMsgs.slice(-10);
     recent.forEach(function(m) {
       msgs.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
     });
-    if (skillResult && skillResult.matched) {
-      msgs.push({ role: "system", content: "Skill '" + skillResult.skill_name + "' wurde ausgefuehrt. Ergebnis:\n" + skillResult.result });
-    }
     if (files && files.length > 0) {
       var fileContext = "Der Nutzer hat folgende Dateien angehaengt:\n";
       files.forEach(function(f) { fileContext += "- " + f.name + " (Pfad: " + f.path + ")\n"; });
@@ -1243,6 +1239,9 @@
   function handleSlashCommand(text) {
     var parts = text.split(/\s+/);
     var command = parts[0].toLowerCase();
+
+    // Jeden Befehl ins Immediate Memory speichern
+    callBackend("memory_add_immediate", { key: "cmd_" + command + "_" + Date.now(), value: text, tags: ["command", "slash"] }).catch(function() {});
 
     if (command === "/help") {
       appendMessage("assistant", "**Verfuegbare Befehle:**\n\n- /help — Diese Hilfe\n- /skills — Skill Hub oeffnen\n- /memory — Memory Gehirn oeffnen\n- /agent <task> — Agent starten\n- /vision <image> — Bild analysieren\n- /cmd <command> — Befehl ausfuehren\n- /file <path> — Datei lesen\n- /password — Password Manager oeffnen\n- /new — Neue Sitzung\n- /clear — Sitzung leeren\n- /settings — Einstellungen", Date.now(), true);
@@ -1279,9 +1278,11 @@
       if (cmd) {
         appendMessage("user", "/cmd " + cmd, Date.now(), true);
         showChatActivity("Fuehre Befehl aus...");
-        executeSystemCommand(cmd).then(function(resultHtml) {
+        callBackend("execute_command", { command: cmd }).then(function(result) {
           hideChatActivity();
-          appendMessage("assistant", resultHtml, Date.now(), true);
+          var res = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          appendMessage("assistant", "Befehl ausgefuehrt:\n\n```\n" + res + "\n```", Date.now(), true);
+          callBackend("memory_add_immediate", { key: "cmd_result_" + Date.now(), value: "Befehl: " + cmd + " -> " + res.substring(0, 200), tags: ["command", "result"] }).catch(function() {});
           callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
         }).catch(function(err) {
           hideChatActivity();
@@ -1297,6 +1298,7 @@
           hideChatActivity();
           var truncated = content.length > 5000 ? content.substring(0, 5000) + "\n... (gekuerzt)" : content;
           appendMessage("assistant", "Datei: " + filePath + "\n\n```\n" + truncated + "\n```", Date.now(), true);
+          callBackend("memory_add_immediate", { key: "file_read_" + Date.now(), value: "Datei: " + filePath, tags: ["file", "read"] }).catch(function() {});
           callBackend("log_activity", { type: "file_read", message: filePath }).catch(function() {});
         }).catch(function(err) {
           hideChatActivity();
@@ -1371,24 +1373,79 @@
   var currentMemoryZone = "core";
   var hoveredZone = null;
 
-  // Zone-Konfiguration
+  // Zone-Konfiguration (5 Zonen: 3-Tier Flow)
   var ZONE_CONFIG = {
-    core: { name: "Core Memory", color: 0x4a9eff, colorHex: "#4a9eff", searchCmd: "memory_search_core", deleteCmd: "memory_delete_core", editCmd: "memory_edit_core", addCmd: "memory_add_core" },
-    skills: { name: "Skills", color: 0x34c759, colorHex: "#34c759", searchCmd: "memory_search_skills", deleteCmd: "memory_delete_skill", addCmd: "memory_add_skill" },
-    sensitive: { name: "Sensitive Data", color: 0xbf5af2, colorHex: "#bf5af2", searchCmd: "memory_search_sensitive", deleteCmd: "memory_delete_sensitive", editCmd: "memory_edit_sensitive", addCmd: "memory_add_sensitive" }
+    immediate: { name: "Immediate Memory", tier: "temporaer", color: 0xff9500, colorHex: "#ff9500", searchCmd: "memory_search_zone", deleteCmd: "memory_delete_from_zone", editCmd: "memory_edit_in_zone", addCmd: "memory_add_to_zone", zoneParam: "immediate" },
+    shortterm: { name: "Short-Term Memory", tier: "uebergang", color: 0x00d4ff, colorHex: "#00d4ff", searchCmd: "memory_search_zone", deleteCmd: "memory_delete_from_zone", editCmd: "memory_edit_in_zone", addCmd: "memory_add_to_zone", zoneParam: "shortterm" },
+    core: { name: "Core Memory", tier: "langzeit", color: 0x0071e3, colorHex: "#0071e3", searchCmd: "memory_search_core", deleteCmd: "memory_delete_core", editCmd: "memory_edit_core", addCmd: "memory_add_core", zoneParam: "core" },
+    skills: { name: "Skills", tier: "langzeit", color: 0x30d158, colorHex: "#30d158", searchCmd: "memory_search_skills", deleteCmd: "memory_delete_skill", editCmd: "memory_edit_skill", addCmd: "memory_add_skill", zoneParam: "skills" },
+    sensitive: { name: "Sensitive Data", tier: "langzeit", color: 0xb537f2, colorHex: "#b537f2", searchCmd: "memory_search_sensitive", deleteCmd: "memory_delete_sensitive", editCmd: "memory_edit_sensitive", addCmd: "memory_add_sensitive", zoneParam: "sensitive" }
   };
+
+  // Zone-Tier fuer CSS-Klassen
+  function zoneTierClass(zone) {
+    return "zone-tier-" + zone;
+  }
+
+  // Bestimmt die naechste hoehere Zone im Flow
+  function nextZoneInFlow(zone) {
+    if (zone === "immediate") return "shortterm";
+    if (zone === "shortterm") return "core";
+    return null;
+  }
 
   function setupMemoryView() {
     $("refreshMemoryBtn").addEventListener("click", function() {
       loadMemoryZone(currentMemoryZone);
+      updateFlowStats();
       if (!brainViewerInitialized) initBrainViewer();
     });
+    if ($("memoryFlowBtn")) {
+      $("memoryFlowBtn").addEventListener("click", function() {
+        callBackend("memory_flow", {}).then(function() {
+          loadMemoryZone(currentMemoryZone);
+          updateFlowStats();
+        }).catch(function() {});
+      });
+    }
     $("memoryAddBtn").addEventListener("click", function() {
       openMemoryEditModal(null, currentMemoryZone);
     });
     $("memoryZoneSearch").addEventListener("input", function() {
       searchMemoryZone(currentMemoryZone, this.value);
     });
+    // Zone-Tabs
+    $$(".zone-tab").forEach(function(tab) {
+      tab.addEventListener("click", function() {
+        var zone = tab.getAttribute("data-zone");
+        $$(".zone-tab").forEach(function(t) { t.classList.remove("active"); });
+        tab.classList.add("active");
+        loadMemoryZone(zone);
+      });
+    });
+  }
+
+  // Flow-Status-Bar aktualisieren
+  function updateFlowStats() {
+    callBackend("memory_status", {}).then(function(result) {
+      var status = {};
+      try { status = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
+      var stats = $("memoryFlowStats");
+      if (!stats) return;
+      var imm = status.immediate || {};
+      var st = status.shortterm || {};
+      var core = status.core || {};
+      var skills = status.skills || {};
+      var sens = status.sensitive || {};
+      stats.innerHTML =
+        '<span class="flow-stat"><span class="flow-dot immediate"></span> Immediate: ' + (imm.count || 0) + '/' + (imm.max || 100) + '</span>' +
+        '<span class="flow-arrow">&rarr;</span>' +
+        '<span class="flow-stat"><span class="flow-dot shortterm"></span> Short-Term: ' + (st.count || 0) + '/' + (st.max || 500) + '</span>' +
+        '<span class="flow-arrow">&rarr;</span>' +
+        '<span class="flow-stat"><span class="flow-dot core"></span> Core: ' + (core.count || 0) + '</span>' +
+        '<span class="flow-stat"><span class="flow-dot skills"></span> Skills: ' + (skills.count || 0) + '</span>' +
+        '<span class="flow-stat"><span class="flow-dot sensitive"></span> Sensitiv: ' + (sens.count || 0) + '</span>';
+    }).catch(function() {});
   }
 
   function initBrainViewer() {
@@ -1403,28 +1460,15 @@
       return;
     }
 
-    // Three.js als ES-Module lokal laden (kein CDN noetig)
-    // WICHTIG: Der Funktionsparameter ist der ES module namespace
-    // (readonly, exotic object). Wir kopieren alle Eigenschaften in ein
-    // plain object T und weisen dieses window.THREE zu, damit spaetere
-    // Zuweisungen (OrbitControls, GLTFLoader) und new THREE.X() funktionieren.
-    import("./lib/three.module.js").then(function(THREE_MOD) {
-      var keys = Object.keys(THREE_MOD);
-      var T = {};
-      for (var i = 0; i < keys.length; i++) {
-        T[keys[i]] = THREE_MOD[keys[i]];
-      }
-      window.THREE = T;
-      return import("./lib/OrbitControls.js").then(function(orbitMod) {
-        window.THREE.OrbitControls = orbitMod.OrbitControls;
-        return import("./lib/GLTFLoader.js").then(function(gltfMod) {
-          window.THREE.GLTFLoader = gltfMod.GLTFLoader;
-          initBrainThree(canvas, width, height);
-        });
+    // Three.js wurde via index.html <script type="module"> geladen.
+    // Warte auf three-loaded Event falls noch nicht bereit.
+    if (window.THREE_LOADED) {
+      initBrainThree(canvas, width, height);
+    } else {
+      window.addEventListener("three-loaded", function() {
+        initBrainThree(canvas, width, height);
       });
-    }).catch(function(e) {
-      $("brainLoading").textContent = "Three.js Fehler: " + e.message;
-    });
+    }
   }
 
   function initBrainThree(canvas, width, height) {
@@ -1475,18 +1519,16 @@
 
   function loadOrbitControls(canvas) {
     var THREE = window.THREE;
-    // OrbitControls wurde bereits als ES-Modul geladen
-    if (THREE.OrbitControls && brainCamera && brainRenderer) {
+    if (THREE && THREE.OrbitControls && brainCamera && brainRenderer) {
       brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
       brainControls.enableDamping = true;
       brainControls.dampingFactor = 0.05;
       brainControls.minDistance = 3;
       brainControls.maxDistance = 15;
-      brainControls.autoRotate = false;
-      // Bei User-Interaktion Auto-Rotation stoppen
-      brainControls.addEventListener("start", function() { brainAutoRotate = false; });
+      brainControls.autoRotate = true;
+      brainControls.autoRotateSpeed = 1.0;
     } else {
-      // Fallback: manuelle Mouse-Controls
+      // Fallback: manuelle Controls
       setupManualControls(canvas);
     }
   }
@@ -1520,104 +1562,132 @@
 
   function loadBrainModel(canvas, width, height) {
     var THREE = window.THREE;
-    // GLTFLoader wurde bereits als ES-Modul geladen
-    if (THREE.GLTFLoader) {
-      var loader = new THREE.GLTFLoader();
-      // Realistisches MRI-basiertes Gehirn laden (190 anatomische Regionen)
-      loader.load("assets/brain_realistic.glb",
-        function(gltf) {
+    if (!THREE || !THREE.GLTFLoader) {
+      console.warn("GLTFLoader nicht verfuegbar, verwende Placeholder");
+      createPlaceholderBrain();
+      $("brainLoading").style.display = "none";
+      return;
+    }
+    // Verwende fetch() + GLTFLoader.parse() statt GLTFLoader.load()
+    // fetch() funktioniert zuverlaessig unter tauri://localhost
+    fetch("assets/brain_realistic.glb")
+      .then(function(res) { return res.arrayBuffer(); })
+      .then(function(buffer) {
+        var loader = new THREE.GLTFLoader();
+        loader.parse(buffer, "", function(gltf) {
           brainModel = gltf.scene;
-          // Skalierung und Zentrierung basierend auf Bounding-Box
           scaleAndCenterBrain(brainModel);
-          // Zonen-Zuordnung ueber Material-Namen (CoreMemory_Left, Skills_Right, Sensitive_Center)
           createBrainZones(brainModel);
           brainScene.add(brainModel);
           $("brainLoading").style.display = "none";
-        },
-        function(progress) {
-          if (progress.total > 0) {
-            $("brainLoading").textContent = "Lade Gehirn... " + Math.round((progress.loaded / progress.total) * 100) + "%";
-          }
-        },
-        function(err) {
-          // Fallback 1: altes stilisiertes brain.glb laden
-          console.log("brain_realistic.glb nicht verfuegbar, versuche brain.glb");
-          loader.load("assets/brain.glb",
-            function(gltf2) {
-              brainModel = gltf2.scene;
+        }, function(err) {
+          console.error("GLTF parse error:", err);
+          createPlaceholderBrain();
+          $("brainLoading").style.display = "none";
+        });
+      })
+      .catch(function(err) {
+        console.error("Fetch error fuer brain_realistic.glb:", err);
+        // Fallback auf brain.glb
+        fetch("assets/brain.glb")
+          .then(function(res) { return res.arrayBuffer(); })
+          .then(function(buffer) {
+            var loader = new THREE.GLTFLoader();
+            loader.parse(buffer, "", function(gltf) {
+              brainModel = gltf.scene;
+              scaleAndCenterBrain(brainModel);
               createBrainZones(brainModel);
               brainScene.add(brainModel);
               $("brainLoading").style.display = "none";
-            },
-            undefined,
-            function(err2) {
-              // Fallback 2: Placeholder-Gehirn (3 Sphaeren)
-              console.log("brain.glb auch nicht verfuegbar, erstelle Placeholder");
+            }, function(err2) {
+              console.error("GLTF parse error (fallback):", err2);
               createPlaceholderBrain();
               $("brainLoading").style.display = "none";
-            }
-          );
-        }
-      );
-    } else {
-      createPlaceholderBrain();
-      $("brainLoading").style.display = "none";
-    }
+            });
+          })
+          .catch(function(err3) {
+            console.error("Fetch error fuer brain.glb:", err3);
+            createPlaceholderBrain();
+            $("brainLoading").style.display = "none";
+          });
+      });
   }
 
-  // MRI-Modell skalieren und zentrieren, damit es gut im Canvas sichtbar ist (Camera bei z=5)
+  // Skaliert und zentriert das Gehirn-Modell in der Kamera-Ansicht
   function scaleAndCenterBrain(model) {
     var THREE = window.THREE;
-    var bbox = new THREE.Box3().setFromObject(model);
+    var box = new THREE.Box3().setFromObject(model);
     var size = new THREE.Vector3();
-    bbox.getSize(size);
+    box.getSize(size);
     var center = new THREE.Vector3();
-    bbox.getCenter(center);
-    // Groesste Dimension an ~3.5 Einheiten normieren (sichtbar bei Camera z=5, FOV 50)
+    box.getCenter(center);
+    // Zentrieren
+    model.position.sub(center);
+    // Skalieren auf ~3 Einheiten Durchmesser
     var maxDim = Math.max(size.x, size.y, size.z);
     if (maxDim > 0) {
-      var scale = 3.5 / maxDim;
+      var scale = 3.0 / maxDim;
       model.scale.setScalar(scale);
     }
-    // Modell im Ursprung zentrieren
-    model.position.sub(center.multiplyScalar(model.scale.x));
   }
 
-  // Placeholder-Gehirn: 3 Spheren fuer die 3 Zonen
+  // 3D Gehirn: 5 Zonen (3-Tier Flow)
+  // Immediate: Gelb/Orange (#ff9500) — outer ring
+  // Short-Term: Cyan (#00d4ff) — middle ring
+  // Core: Blau (#0071e3) — linke Hemisphaere
+  // Skills: Gruen (#30d158) — rechte Hemisphaere
+  // Sensitive: Purple (#b537f2) — zentral
   function createPlaceholderBrain() {
-    var THREE = window.THREE;
     brainModel = new THREE.Group();
 
-    // Blaue Hemisphaere (Core) — linke Haelfte
+    // Immediate Memory — outer ring (gelb/orange, gross durchsichtig)
+    var immGeo = new THREE.SphereGeometry(2.8, 32, 32);
+    var immMat = new THREE.MeshPhongMaterial({ color: 0xff9500, transparent: true, opacity: 0.12, shininess: 60, emissive: 0xff9500, emissiveIntensity: 0.05, side: THREE.DoubleSide });
+    var immMesh = new THREE.Mesh(immGeo, immMat);
+    immMesh.position.set(0, 0, 0);
+    immMesh.userData = { zone: "immediate", name: "Immediate Memory" };
+    brainModel.add(immMesh);
+    brainZones.push(immMesh);
+
+    // Short-Term Memory — middle ring (cyan, mittlere Sphaere)
+    var stGeo = new THREE.SphereGeometry(2.2, 32, 32);
+    var stMat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.18, shininess: 70, emissive: 0x00d4ff, emissiveIntensity: 0.08, side: THREE.DoubleSide });
+    var stMesh = new THREE.Mesh(stGeo, stMat);
+    stMesh.position.set(0, 0, 0);
+    stMesh.userData = { zone: "shortterm", name: "Short-Term Memory" };
+    brainModel.add(stMesh);
+    brainZones.push(stMesh);
+
+    // Core Memory — blaue Hemisphaere (linke Haelfte)
     var coreGeo = new THREE.SphereGeometry(1.5, 32, 32, 0, Math.PI * 0.5, 0, Math.PI * 2);
-    var coreMat = new THREE.MeshPhongMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.85, shininess: 80 });
+    var coreMat = new THREE.MeshPhongMaterial({ color: 0x0071e3, transparent: true, opacity: 0.85, shininess: 80 });
     var coreMesh = new THREE.Mesh(coreGeo, coreMat);
     coreMesh.position.set(-0.3, 0, 0);
     coreMesh.userData = { zone: "core", name: "Core Memory" };
     brainModel.add(coreMesh);
     brainZones.push(coreMesh);
 
-    // Gruene Hemisphaere (Skills) — rechte Haelfte
+    // Skills Memory — gruene Hemisphaere (rechte Haelfte)
     var skillsGeo = new THREE.SphereGeometry(1.5, 32, 32, Math.PI * 0.5, Math.PI * 0.5, 0, Math.PI * 2);
-    var skillsMat = new THREE.MeshPhongMaterial({ color: 0x34c759, transparent: true, opacity: 0.85, shininess: 80 });
+    var skillsMat = new THREE.MeshPhongMaterial({ color: 0x30d158, transparent: true, opacity: 0.85, shininess: 80 });
     var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
     skillsMesh.position.set(0.3, 0, 0);
     skillsMesh.userData = { zone: "skills", name: "Skills" };
     brainModel.add(skillsMesh);
     brainZones.push(skillsMesh);
 
-    // Purple zentrale Sektion (Sensitive) — kleine Sphaere in der Mitte
+    // Sensitive Memory — purple zentrale Sphaere
     var sensGeo = new THREE.SphereGeometry(0.7, 32, 32);
-    var sensMat = new THREE.MeshPhongMaterial({ color: 0xbf5af2, transparent: true, opacity: 0.9, shininess: 100, emissive: 0xbf5af2, emissiveIntensity: 0.2 });
+    var sensMat = new THREE.MeshPhongMaterial({ color: 0xb537f2, transparent: true, opacity: 0.9, shininess: 100, emissive: 0xb537f2, emissiveIntensity: 0.2 });
     var sensMesh = new THREE.Mesh(sensGeo, sensMat);
     sensMesh.position.set(0, 0, 0);
     sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
     brainModel.add(sensMesh);
     brainZones.push(sensMesh);
 
-    // Verbindungs-Linien (synapsen-aehnlich)
+    // Verbindungs-Linien (synapsen-aehnlich) — Flow-Pfeile zwischen Zonen
     var lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 });
-    for (var i = 0; i < 15; i++) {
+    for (var i = 0; i < 20; i++) {
       var start = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
       var end = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
       var lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
@@ -1625,47 +1695,86 @@
       brainModel.add(line);
     }
 
+    // Flow-Pfeile: Immediate -> Short-Term -> Core (visuelle Verbindungen)
+    var flowMat = new THREE.LineBasicMaterial({ color: 0xff9500, transparent: true, opacity: 0.5 });
+    var flowPoints1 = [new THREE.Vector3(2.5, 0.5, 0), new THREE.Vector3(1.8, 0.3, 0)];
+    var flowLine1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(flowPoints1), flowMat);
+    brainModel.add(flowLine1);
+
+    var flowMat2 = new THREE.LineBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.5 });
+    var flowPoints2 = [new THREE.Vector3(1.5, -0.3, 0), new THREE.Vector3(0.5, -0.2, 0)];
+    var flowLine2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(flowPoints2), flowMat2);
+    brainModel.add(flowLine2);
+
     brainScene.add(brainModel);
   }
 
   function createBrainZones(model) {
-    // MRI-Modell: 190 Meshes mit 3 Material-Gruppen
-    //   CoreMemory_Left  -> blau  -> core zone
-    //   Skills_Right     -> gruen -> skills zone
-    //   Sensitive_Center -> purple-> sensitive zone
-    // Die Farben werden NICHT ueberschrieben — das Modell hat bereits die
-    // richtigen Farben vom Blender-Agent. Wir setzen nur userData.zone pro Mesh.
-    // Zusaetzlich wird Node-Name als Fallback geprueft (fuer das alte brain.glb).
-    brainZones = [];
+    // Wenn brain.glb geladen wurde, erstelle Zonen-Meshes darueber
+    // Suche nach Meshes mit bestimmten Namen oder erstelle Spheren als Overlays
+    // Falls das Modell bereits benannte Zonen hat, nutze diese
+    var hasNamedZones = false;
     model.traverse(function(child) {
       if (child.isMesh) {
+        var name = (child.name || "").toLowerCase();
+        // Auch Material-Namen pruefen (brain_realistic.glb verwendet Material-Namen)
         var matName = "";
         if (child.material && child.material.name) {
           matName = child.material.name.toLowerCase();
         }
-        var nodeName = (child.name || "").toLowerCase();
-        var combined = matName + " " + nodeName;
-
-        if (combined.indexOf("core") >= 0) {
-          child.userData = { zone: "core", name: "Core Memory" };
+        var combined = name + " " + matName;
+        if (combined.indexOf("immediate") >= 0 || combined.indexOf("imm") >= 0) {
+          child.userData = { zone: "immediate", name: "Immediate Memory" };
+          if (child.material) child.material.color.setHex(0xff9500);
           brainZones.push(child);
+          hasNamedZones = true;
+        } else if (combined.indexOf("shortterm") >= 0 || combined.indexOf("short") >= 0) {
+          child.userData = { zone: "shortterm", name: "Short-Term Memory" };
+          if (child.material) child.material.color.setHex(0x00d4ff);
+          brainZones.push(child);
+          hasNamedZones = true;
+        } else if (combined.indexOf("core") >= 0) {
+          child.userData = { zone: "core", name: "Core Memory" };
+          if (child.material) child.material.color.setHex(0x0071e3);
+          brainZones.push(child);
+          hasNamedZones = true;
         } else if (combined.indexOf("skill") >= 0) {
           child.userData = { zone: "skills", name: "Skills" };
+          if (child.material) child.material.color.setHex(0x30d158);
           brainZones.push(child);
-        } else if (combined.indexOf("sensitive") >= 0 || combined.indexOf("sens_") >= 0 || combined.indexOf("center") >= 0) {
+          hasNamedZones = true;
+        } else if (combined.indexOf("sensitive") >= 0 || combined.indexOf("sens") >= 0) {
           child.userData = { zone: "sensitive", name: "Sensitive Data" };
+          if (child.material) child.material.color.setHex(0xb537f2);
           brainZones.push(child);
+          hasNamedZones = true;
         }
       }
     });
 
-    // Falls keine Zonen ueber Material/Node-Namen gefunden wurden, erstelle
-    // Overlay-Spheren (Kompatibilitaet mit unbenannten Modellen)
-    if (brainZones.length === 0) {
-      var THREE = window.THREE;
+    // Falls keine benannten Zonen gefunden wurden, erstelle 5 Overlay-Spheren
+    if (!hasNamedZones) {
+      // Immediate — outer ring
+      var immGeo = new THREE.SphereGeometry(1.6, 24, 24);
+      var immMat = new THREE.MeshPhongMaterial({ color: 0xff9500, transparent: true, opacity: 0.1, shininess: 50, side: THREE.DoubleSide });
+      var immMesh = new THREE.Mesh(immGeo, immMat);
+      immMesh.position.set(0, 0, 0);
+      immMesh.userData = { zone: "immediate", name: "Immediate Memory" };
+      model.add(immMesh);
+      brainZones.push(immMesh);
+
+      // Short-Term — middle ring
+      var stGeo = new THREE.SphereGeometry(1.3, 24, 24);
+      var stMat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.15, shininess: 60, side: THREE.DoubleSide });
+      var stMesh = new THREE.Mesh(stGeo, stMat);
+      stMesh.position.set(0, 0, 0);
+      stMesh.userData = { zone: "shortterm", name: "Short-Term Memory" };
+      model.add(stMesh);
+      brainZones.push(stMesh);
+
       // Core — linke Haelfte
       var coreGeo = new THREE.SphereGeometry(0.8, 24, 24, 0, Math.PI);
-      var coreMat = new THREE.MeshPhongMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.4, shininess: 60 });
+      var coreMat = new THREE.MeshPhongMaterial({ color: 0x0071e3, transparent: true, opacity: 0.4, shininess: 60 });
       var coreMesh = new THREE.Mesh(coreGeo, coreMat);
       coreMesh.position.set(-0.8, 0, 0);
       coreMesh.userData = { zone: "core", name: "Core Memory" };
@@ -1674,7 +1783,7 @@
 
       // Skills — rechte Haelfte
       var skillsGeo = new THREE.SphereGeometry(0.8, 24, 24, Math.PI, Math.PI);
-      var skillsMat = new THREE.MeshPhongMaterial({ color: 0x34c759, transparent: true, opacity: 0.4, shininess: 60 });
+      var skillsMat = new THREE.MeshPhongMaterial({ color: 0x30d158, transparent: true, opacity: 0.4, shininess: 60 });
       var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
       skillsMesh.position.set(0.8, 0, 0);
       skillsMesh.userData = { zone: "skills", name: "Skills" };
@@ -1683,7 +1792,7 @@
 
       // Sensitive — zentrale Sphaere
       var sensGeo = new THREE.SphereGeometry(0.5, 24, 24);
-      var sensMat = new THREE.MeshPhongMaterial({ color: 0xbf5af2, transparent: true, opacity: 0.5, shininess: 80, emissive: 0xbf5af2, emissiveIntensity: 0.15 });
+      var sensMat = new THREE.MeshPhongMaterial({ color: 0xb537f2, transparent: true, opacity: 0.5, shininess: 80, emissive: 0xb537f2, emissiveIntensity: 0.15 });
       var sensMesh = new THREE.Mesh(sensGeo, sensMat);
       sensMesh.position.set(0, 0, 0);
       sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
@@ -1709,7 +1818,6 @@
   }
 
   function onBrainMouseMove(event) {
-    var THREE = window.THREE;
     if (!brainRaycaster || !brainCamera) return;
     var rect = event.target.getBoundingClientRect();
     brainMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1734,7 +1842,7 @@
             hoveredZone = intersects[0].object;
             if (hoveredZone.material) {
               hoveredZone.userData.originalEmissive = hoveredZone.material.emissiveIntensity || 0;
-              hoveredZone.material.emissive = new THREE.Color(zc.color);
+              hoveredZone.material.emissive = new window.THREE.Color(zc.color);
               hoveredZone.material.emissiveIntensity = 0.4;
             }
           }
@@ -1780,9 +1888,16 @@
     if (!zc) return;
     $("zonePanelTitle").textContent = zc.name;
     $("memoryAddBtn").style.display = "inline-flex";
+    // Active Tab sync
+    $$(".zone-tab").forEach(function(t) {
+      if (t.getAttribute("data-zone") === zone) t.classList.add("active");
+      else t.classList.remove("active");
+    });
+    updateFlowStats();
     var list = $("memoryZoneList");
     list.innerHTML = '<div class="empty-state"><p>Lade ' + zc.name + '...</p></div>';
-    callBackend(zc.searchCmd, { query: "" }).then(function(result) {
+    var searchArgs = zc.zoneParam ? { zone: zc.zoneParam, query: "" } : { query: "" };
+    callBackend(zc.searchCmd, searchArgs).then(function(result) {
       var entries = [];
       try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
       if (!Array.isArray(entries)) entries = [];
@@ -1803,7 +1918,8 @@
   function searchMemoryZone(zone, query) {
     var zc = ZONE_CONFIG[zone];
     if (!zc) return;
-    callBackend(zc.searchCmd, { query: query }).then(function(result) {
+    var searchArgs = zc.zoneParam ? { zone: zc.zoneParam, query: query } : { query: query };
+    callBackend(zc.searchCmd, searchArgs).then(function(result) {
       var entries = [];
       try { entries = typeof result === "string" ? JSON.parse(result) : result; } catch (e) {}
       if (!Array.isArray(entries)) entries = [];
@@ -1834,7 +1950,7 @@
     list.innerHTML = "";
     entries.forEach(function(entry) {
       var item = document.createElement("div");
-      item.className = "memory-zone-item";
+      item.className = "memory-zone-item " + zoneTierClass(zone);
       var key = entry.key || entry.title || entry.id || "Eintrag";
       var value = entry.value || entry.content || "";
       var truncated = value.length > 200 ? value.substring(0, 200) + "..." : value;
@@ -1845,10 +1961,20 @@
         tags.forEach(function(t) { tagsHtml += '<span class="mz-item-tag">' + escapeHtml(t) + '</span>'; });
       }
       var id = entry.id || entry.key || "";
+      var refs = entry.references || 0;
+      var promoteHtml = "";
+      var nextZ = nextZoneInFlow(zone);
+      if (nextZ) {
+        var nextLabel = nextZ === "shortterm" ? "→ Short-Term" : "→ Long-Term";
+        promoteHtml = '<button class="mz-promote-btn" data-id="' + escapeHtml(id) + '" data-from="' + zone + '" data-to="' + nextZ + '" title="Befoerdern">' + nextLabel + '</button>';
+      } else if (zone === "core" || zone === "skills") {
+        promoteHtml = '<button class="mz-promote-btn" data-id="' + escapeHtml(id) + '" data-from="' + zone + '" data-to="sensitive" title="Als sensitiv markieren">→ Sensitiv</button>';
+      }
       item.innerHTML =
         '<div class="mz-item-header">' +
           '<span class="mz-item-key">' + escapeHtml(key) + '</span>' +
           '<div class="mz-item-actions">' +
+            promoteHtml +
             '<button class="mz-action-btn edit" data-id="' + escapeHtml(id) + '" title="Bearbeiten">✏️</button>' +
             '<button class="mz-action-btn delete" data-id="' + escapeHtml(id) + '" title="Loeschen">🗑</button>' +
           '</div>' +
@@ -1856,6 +1982,7 @@
         '<div class="mz-item-value">' + escapeHtml(truncated) + '</div>' +
         '<div class="mz-item-meta">' +
           (ts ? '<span>' + ts + '</span>' : "") +
+          (refs > 0 ? '<span class="mz-item-refs">Refs: ' + refs + '</span>' : "") +
           tagsHtml +
         '</div>';
       list.appendChild(item);
@@ -1875,10 +2002,27 @@
         var zc = ZONE_CONFIG[zone];
         if (!zc) return;
         showConfirm("Loeschen", "Eintrag wirklich loeschen?", function() {
-          callBackend(zc.deleteCmd, { key: id }).then(function() {
+          var delArgs = zc.zoneParam ? { zone: zc.zoneParam, key: id } : { key: id };
+          callBackend(zc.deleteCmd, delArgs).then(function() {
             loadMemoryZone(zone);
+            updateFlowStats();
           }).catch(function() {});
           closeModal("confirmBackdrop", "confirmModal");
+        });
+      });
+    });
+
+    // Promote Buttons
+    list.querySelectorAll(".mz-promote-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var entryId = btn.getAttribute("data-id");
+        var fromZone = btn.getAttribute("data-from");
+        var toZone = btn.getAttribute("data-to");
+        callBackend("memory_promote", { entryId: entryId, fromZone: fromZone, toZone: toZone }).then(function() {
+          loadMemoryZone(currentMemoryZone);
+          updateFlowStats();
+        }).catch(function(err) {
+          alert("Promote fehlgeschlagen: " + err);
         });
       });
     });
@@ -1900,11 +2044,13 @@
       var zc = ZONE_CONFIG[memoryEditZone];
       if (!zc) return;
       var args = { key: key, value: value, tags: tags };
+      if (zc.zoneParam) args.zone = zc.zoneParam;
       var cmd = memoryEditId ? zc.editCmd : zc.addCmd;
       if (memoryEditId) args.id = memoryEditId;
       callBackend(cmd, args).then(function() {
         closeModal("memoryEditBackdrop", "memoryEditModal");
         loadMemoryZone(memoryEditZone);
+        updateFlowStats();
       }).catch(function(err) {
         alert("Fehler beim Speichern: " + err);
       });

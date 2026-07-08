@@ -6,7 +6,17 @@
   <title>Titan Toti</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="update.css" />
-  <!-- Three.js wird als ES-Modul lokal geladen (siehe src/lib/) -->
+  <!-- Three.js + Addons als ES-Module laden und als globale Variablen bereitstellen -->
+  <script type="module">
+    import * as THREE from './lib/three.module.js';
+    window.THREE = THREE;
+    import { OrbitControls } from './lib/OrbitControls.js';
+    window.THREE.OrbitControls = OrbitControls;
+    import { GLTFLoader } from './lib/GLTFLoader.js';
+    window.THREE.GLTFLoader = GLTFLoader;
+    window.THREE_LOADED = true;
+    window.dispatchEvent(new Event('three-loaded'));
+  </script>
 </head>
 <body>
 
@@ -236,6 +246,10 @@
         <div class="view-header">
           <h1>Memory — 3D Gehirn</h1>
           <button class="btn-secondary" id="refreshMemoryBtn">Aktualisieren</button>
+          <button class="btn-secondary" id="memoryFlowBtn" style="margin-left:8px;">Flow</button>
+        </div>
+        <div class="memory-flow-bar" id="memoryFlowBar">
+          <div class="flow-stats" id="memoryFlowStats"></div>
         </div>
         <div class="memory-brain-container">
           <div class="brain-canvas-wrap" id="brainCanvasWrap">
@@ -243,6 +257,8 @@
             <div class="brain-tooltip" id="brainTooltip" style="display:none;"></div>
             <div class="brain-loading" id="brainLoading">Lade 3D Gehirn...</div>
             <div class="brain-zones-hint">
+              <span class="zone-hint zone-immediate">● Immediate</span>
+              <span class="zone-hint zone-shortterm">● Short-Term</span>
               <span class="zone-hint zone-core">● Core</span>
               <span class="zone-hint zone-skills">● Skills</span>
               <span class="zone-hint zone-sensitive">● Sensitiv</span>
@@ -253,8 +269,15 @@
               <h2 id="zonePanelTitle">Waehle eine Gehirn-Zone</h2>
               <button class="btn-primary" id="memoryAddBtn" style="display:none;">Hinzufuegen</button>
             </div>
+            <div class="memory-zone-tabs" id="memoryZoneTabs">
+              <button class="zone-tab zone-tab-immediate active" data-zone="immediate">Immediate</button>
+              <button class="zone-tab zone-tab-shortterm" data-zone="shortterm">Short-Term</button>
+              <button class="zone-tab zone-tab-core" data-zone="core">Core</button>
+              <button class="zone-tab zone-tab-skills" data-zone="skills">Skills</button>
+              <button class="zone-tab zone-tab-sensitive" data-zone="sensitive">Sensitiv</button>
+            </div>
             <div class="search-bar">
-              <input type="text" id="memoryZoneSearch" placeholder="Eintraege durchsuchen..." />
+              <input type="text" id="memoryZoneSearch" placeholder="Eintraege durchsuchen..."/>
             </div>
             <div class="memory-zone-list" id="memoryZoneList">
               <div class="empty-state"><p>Klicke auf eine Zone im Gehirn um Eintraege zu sehen.</p></div>
