@@ -1315,12 +1315,21 @@
     }
 
     // Three.js als ES-Module lokal laden (kein CDN noetig)
-    import("./lib/three.module.js").then(function(THREE) {
-      window.THREE = THREE;
+    // WICHTIG: Der Funktionsparameter ist der ES module namespace
+    // (readonly, exotic object). Wir kopieren alle Eigenschaften in ein
+    // plain object T und weisen dieses window.THREE zu, damit spaetere
+    // Zuweisungen (OrbitControls, GLTFLoader) und new THREE.X() funktionieren.
+    import("./lib/three.module.js").then(function(THREE_MOD) {
+      var keys = Object.keys(THREE_MOD);
+      var T = {};
+      for (var i = 0; i < keys.length; i++) {
+        T[keys[i]] = THREE_MOD[keys[i]];
+      }
+      window.THREE = T;
       return import("./lib/OrbitControls.js").then(function(orbitMod) {
-        THREE.OrbitControls = orbitMod.OrbitControls;
+        window.THREE.OrbitControls = orbitMod.OrbitControls;
         return import("./lib/GLTFLoader.js").then(function(gltfMod) {
-          THREE.GLTFLoader = gltfMod.GLTFLoader;
+          window.THREE.GLTFLoader = gltfMod.GLTFLoader;
           initBrainThree(canvas, width, height);
         });
       });
@@ -1330,6 +1339,7 @@
   }
 
   function initBrainThree(canvas, width, height) {
+    var THREE = window.THREE;
     try {
       brainScene = new THREE.Scene();
       brainCamera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
@@ -1375,6 +1385,7 @@
   }
 
   function loadOrbitControls(canvas) {
+    var THREE = window.THREE;
     // OrbitControls wurde bereits als ES-Modul geladen
     if (THREE.OrbitControls && brainCamera && brainRenderer) {
       brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
@@ -1419,6 +1430,7 @@
   }
 
   function loadBrainModel(canvas, width, height) {
+    var THREE = window.THREE;
     // GLTFLoader wurde bereits als ES-Modul geladen
     if (THREE.GLTFLoader) {
       var loader = new THREE.GLTFLoader();
@@ -1451,6 +1463,7 @@
 
   // Placeholder-Gehirn: 3 Spheren fuer die 3 Zonen
   function createPlaceholderBrain() {
+    var THREE = window.THREE;
     brainModel = new THREE.Group();
 
     // Blaue Hemisphaere (Core) — linke Haelfte
@@ -1494,6 +1507,7 @@
   }
 
   function createBrainZones(model) {
+    var THREE = window.THREE;
     // Wenn brain.glb geladen wurde, erstelle Zonen-Meshes darueber
     // Suche nach Meshes mit bestimmten Namen oder erstelle Spheren als Overlays
     // Falls das Modell bereits benannte Zonen hat, nutze diese
@@ -1568,6 +1582,7 @@
   }
 
   function onBrainMouseMove(event) {
+    var THREE = window.THREE;
     if (!brainRaycaster || !brainCamera) return;
     var rect = event.target.getBoundingClientRect();
     brainMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
