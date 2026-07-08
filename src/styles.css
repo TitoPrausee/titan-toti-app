@@ -555,6 +555,18 @@ html, body {
   font-family: inherit;
 }
 .copy-btn:hover { background: var(--bg-card-hover); }
+.exec-btn {
+  background: transparent;
+  border: 1px solid var(--accent, #51cf66);
+  color: #51cf66;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+.exec-btn:hover { background: rgba(81, 207, 102, 0.15); }
+.exec-btn:disabled { opacity: 0.5; cursor: wait; }
 
 /* TYPING */
 .typing-indicator {

@@ -98,6 +98,68 @@
     return Promise.reject("Tauri nicht verfuegbar");
   }
 
+  // Parst einen Befehls-String in command + args (mit Quote-Handling)
+  function parseCommand(cmdStr) {
+    var parts = [];
+    var current = "";
+    var inQuote = false;
+    var quoteChar = "";
+    for (var i = 0; i < cmdStr.length; i++) {
+      var ch = cmdStr[i];
+      if (inQuote) {
+        if (ch === quoteChar) { inQuote = false; }
+        else { current += ch; }
+      } else if (ch === '"' || ch === "'") {
+        inQuote = true;
+        quoteChar = ch;
+      } else if (ch === " " || ch === "\t") {
+        if (current.length > 0) { parts.push(current); current = ""; }
+      } else {
+        current += ch;
+      }
+    }
+    if (current.length > 0) { parts.push(current); }
+    return parts;
+  }
+
+  // Fuehrt einen Befehl aus und gibt formatiertes HTML zurueck
+  function executeSystemCommand(cmdStr) {
+    var parts = parseCommand(cmdStr);
+    if (parts.length === 0) {
+      return Promise.reject("Kein Befehl angegeben");
+    }
+    return callBackend("execute_command", { command: parts[0], args: parts.slice(1), cwd: null }).then(function(result) {
+      var res;
+      try {
+        res = typeof result === "string" ? JSON.parse(result) : result;
+      } catch (e) {
+        res = { stdout: String(result) };
+      }
+      if (res && res.requires_approval) {
+        return "Befehl erfordert Freigabe: " + escapeHtml(res.command || cmdStr);
+      }
+      var html = "<p><strong>Befehl ausgefuehrt:</strong> " + escapeHtml(cmdStr) + "</p>";
+      if (res && res.stdout && res.stdout.trim()) {
+        html += '<div class="code-block"><div class="code-block-header"><span>stdout</span></div><pre>' + escapeHtml(res.stdout) + "</pre></div>";
+      }
+      if (res && res.stderr && res.stderr.trim()) {
+        html += '<div class="code-block"><div class="code-block-header"><span style="color:#ff6b6b">stderr</span></div><pre style="color:#ff6b6b">' + escapeHtml(res.stderr) + "</pre></div>";
+      }
+      if (res && typeof res.exit_code !== "undefined") {
+        var exitColor = res.exit_code === 0 ? "#51cf66" : "#ff6b6b";
+        html += '<p style="margin-top:6px">Exit-Code: <strong style="color:' + exitColor + '">' + res.exit_code + "</strong>";
+        if (res.duration_ms) {
+          html += " | Dauer: " + res.duration_ms + "ms";
+        }
+        html += "</p>";
+      }
+      if (!res || (!res.stdout && !res.stderr && typeof res.exit_code === "undefined")) {
+        html += "<p>Keine Ausgabe</p>";
+      }
+      return html;
+    });
+  }
+
   // --- DOM HELPERS ---
   function $(id) { return document.getElementById(id); }
   function $$(sel) { return document.querySelectorAll(sel); }
@@ -186,7 +248,10 @@
     html = html.replace(/@@CODEBLOCK_(\d+)@@/g, function(match, idx) {
       var block = codeBlocks[parseInt(idx, 10)];
       if (!block) return match;
-      return '<div class="code-block"><div class="code-block-header"><span>' + escapeHtml(block.lang) + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button></div><pre>' + escapeHtml(block.code) + '</pre></div>';
+      var lang = block.lang.toLowerCase();
+      var isShell = lang === "bash" || lang === "sh" || lang === "shell" || lang === "zsh" || lang === "shell session" || lang === "console" || lang === "terminal";
+      var execBtn = isShell ? ' <button class="exec-btn" data-cmd="' + encodeURIComponent(block.code) + '">Ausfuehren</button>' : '';
+      return '<div class="code-block"><div class="code-block-header"><span>' + escapeHtml(block.lang) + '</span><button class="copy-btn" data-code="' + encodeURIComponent(block.code) + '">Kopieren</button>' + execBtn + '</div><pre>' + escapeHtml(block.code) + '</pre></div>';
     });
     return html;
   }
@@ -917,6 +982,31 @@
         });
       });
     });
+    body.querySelectorAll(".exec-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var cmdText = decodeURIComponent(btn.getAttribute("data-cmd")).trim();
+        // Multi-line: take all non-empty lines, join with ; for sequential execution
+        var lines = cmdText.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0 && l[0] !== "#"; });
+        var cmd = lines.join("; ");
+        if (!cmd) return;
+        btn.textContent = "Laedt...";
+        btn.disabled = true;
+        appendMessage("user", "/cmd " + cmd, Date.now(), true);
+        showChatActivity("Fuehre Befehl aus...");
+        executeSystemCommand(cmd).then(function(resultHtml) {
+          hideChatActivity();
+          appendMessage("assistant", resultHtml, Date.now(), true);
+          callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
+          btn.textContent = "Ausfuehren";
+          btn.disabled = false;
+        }).catch(function(err) {
+          hideChatActivity();
+          appendMessage("assistant", "Befehl-Fehler: " + err, Date.now(), true);
+          btn.textContent = "Ausfuehren";
+          btn.disabled = false;
+        });
+      });
+    });
   }
 
   function scrollToBottom() {
@@ -1189,10 +1279,9 @@
       if (cmd) {
         appendMessage("user", "/cmd " + cmd, Date.now(), true);
         showChatActivity("Fuehre Befehl aus...");
-        callBackend("execute_command", { command: cmd }).then(function(result) {
+        executeSystemCommand(cmd).then(function(resultHtml) {
           hideChatActivity();
-          var res = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-          appendMessage("assistant", "Befehl ausgefuehrt:\n\n```\n" + res + "\n```", Date.now(), true);
+          appendMessage("assistant", resultHtml, Date.now(), true);
           callBackend("log_activity", { type: "command", message: cmd }).catch(function() {});
         }).catch(function(err) {
           hideChatActivity();

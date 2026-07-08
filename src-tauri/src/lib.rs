@@ -228,16 +228,7 @@ async fn list_dir(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn execute_command(command: String, args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
-    // Bypass-Permission-Check
-    if !settings::bypass_permissions() {
-        let cmd_display = format!("{} {}", command, args.join(" "));
-        return Ok(serde_json::json!({
-            "requires_approval": true,
-            "command": cmd_display,
-            "action": "execute_command"
-        }).to_string());
-    }
-
+    // /cmd und Skill-Befehle immer ausfuehren - der User ist Admin auf seinem eigenen Mac
     log_act("command", &format!("Ausgefuehrt: {} {}", command, args.join(" ")));
 
     let start = std::time::Instant::now();
