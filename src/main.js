@@ -1314,18 +1314,19 @@
       return;
     }
 
-    // Three.js dynamisch laden
-    if (typeof THREE === "undefined") {
-      var script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.min.js";
-      script.onload = function() { initBrainThree(canvas, width, height); };
-      script.onerror = function() {
-        $("brainLoading").textContent = "Three.js konnte nicht geladen werden.";
-      };
-      document.head.appendChild(script);
-    } else {
-      initBrainThree(canvas, width, height);
-    }
+    // Three.js als ES-Module lokal laden (kein CDN noetig)
+    import("./lib/three.module.js").then(function(THREE) {
+      window.THREE = THREE;
+      return import("./lib/OrbitControls.js").then(function(orbitMod) {
+        THREE.OrbitControls = orbitMod.OrbitControls;
+        return import("./lib/GLTFLoader.js").then(function(gltfMod) {
+          THREE.GLTFLoader = gltfMod.GLTFLoader;
+          initBrainThree(canvas, width, height);
+        });
+      });
+    }).catch(function(e) {
+      $("brainLoading").textContent = "Three.js Fehler: " + e.message;
+    });
   }
 
   function initBrainThree(canvas, width, height) {
@@ -1374,26 +1375,20 @@
   }
 
   function loadOrbitControls(canvas) {
-    // OrbitControls als Script laden (nicht als Module, um Kompatibilitaet zu gewaehrleisten)
-    var script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js";
-    script.onload = function() {
-      if (typeof THREE.OrbitControls !== "undefined" && brainCamera && brainRenderer) {
-        brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
-        brainControls.enableDamping = true;
-        brainControls.dampingFactor = 0.05;
-        brainControls.minDistance = 3;
-        brainControls.maxDistance = 15;
-        brainControls.autoRotate = false;
-        // Bei User-Interaktion Auto-Rotation stoppen
-        brainControls.addEventListener("start", function() { brainAutoRotate = false; });
-      }
-    };
-    script.onerror = function() {
+    // OrbitControls wurde bereits als ES-Modul geladen
+    if (THREE.OrbitControls && brainCamera && brainRenderer) {
+      brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
+      brainControls.enableDamping = true;
+      brainControls.dampingFactor = 0.05;
+      brainControls.minDistance = 3;
+      brainControls.maxDistance = 15;
+      brainControls.autoRotate = false;
+      // Bei User-Interaktion Auto-Rotation stoppen
+      brainControls.addEventListener("start", function() { brainAutoRotate = false; });
+    } else {
       // Fallback: manuelle Mouse-Controls
       setupManualControls(canvas);
-    };
-    document.head.appendChild(script);
+    }
   }
 
   function setupManualControls(canvas) {
@@ -1424,41 +1419,34 @@
   }
 
   function loadBrainModel(canvas, width, height) {
-    // Versuche GLTFLoader zu laden
-    var gltfScript = document.createElement("script");
-    gltfScript.src = "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js";
-    gltfScript.onload = function() {
-      if (typeof THREE.GLTFLoader !== "undefined") {
-        var loader = new THREE.GLTFLoader();
-        // brain.glb aus assets laden — Tauri serviert assets relativ
-        loader.load("assets/brain.glb",
-          function(gltf) {
-            brainModel = gltf.scene;
-            // Zonen-Markierungen erstellen (falls das Modell sie nicht hat)
-            createBrainZones(brainModel);
-            brainScene.add(brainModel);
-            $("brainLoading").style.display = "none";
-          },
-          function(progress) {
+    // GLTFLoader wurde bereits als ES-Modul geladen
+    if (THREE.GLTFLoader) {
+      var loader = new THREE.GLTFLoader();
+      // brain.glb aus assets laden
+      loader.load("assets/brain.glb",
+        function(gltf) {
+          brainModel = gltf.scene;
+          // Zonen-Markierungen erstellen (falls das Modell sie nicht hat)
+          createBrainZones(brainModel);
+          brainScene.add(brainModel);
+          $("brainLoading").style.display = "none";
+        },
+        function(progress) {
+          if (progress.total > 0) {
             $("brainLoading").textContent = "Lade Gehirn... " + Math.round((progress.loaded / progress.total) * 100) + "%";
-          },
-          function(err) {
-            // Fallback: Placeholder-Gehirn erstellen
-            console.log("brain.glb nicht verfuegbar, erstelle Placeholder");
-            createPlaceholderBrain();
-            $("brainLoading").style.display = "none";
           }
-        );
-      } else {
-        createPlaceholderBrain();
-        $("brainLoading").style.display = "none";
-      }
-    };
-    gltfScript.onerror = function() {
+        },
+        function(err) {
+          // Fallback: Placeholder-Gehirn erstellen
+          console.log("brain.glb nicht verfuegbar, erstelle Placeholder");
+          createPlaceholderBrain();
+          $("brainLoading").style.display = "none";
+        }
+      );
+    } else {
       createPlaceholderBrain();
       $("brainLoading").style.display = "none";
-    };
-    document.head.appendChild(gltfScript);
+    }
   }
 
   // Placeholder-Gehirn: 3 Spheren fuer die 3 Zonen
