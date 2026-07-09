@@ -1882,3 +1882,48 @@ p, span, div, h1, h2, h3, h4, h5, h6, li, a, code, pre {
 }
 
 @keyframes ollama-spin { to { transform: rotate(360deg); } }
+
+
+/* ===== WAVE SHADER BACKGROUND CANVASES (FBM flowfield) ===== */
+.wave-bg-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  display: block;
+}
+
+/* Setup screen: canvas behind card */
+.setup-screen { position: relative; }
+.setup-screen > .setup-card { position: relative; z-index: 1; }
+
+/* Sidebar: canvas behind sidebar content */
+.sidebar { position: relative; }
+.sidebar > .sidebar-close,
+.sidebar > .sidebar-header,
+.sidebar > .nav,
+.sidebar > .sidebar-agents,
+.sidebar > .sidebar-footer {
+  position: relative;
+  z-index: 1;
+}
+
+/* Chat welcome: canvas behind welcome content */
+.chat-welcome { position: relative; }
+.chat-welcome > .welcome-icon,
+.chat-welcome > h2,
+.chat-welcome > p {
+  position: relative;
+  z-index: 1;
+}
+
+/* Chat messages: canvas behind messages */
+.chat-messages { position: relative; }
+.chat-messages > .message,
+.chat-messages > .typing-indicator,
+.chat-messages > .chat-welcome {
+  position: relative;
+  z-index: 1;
+}

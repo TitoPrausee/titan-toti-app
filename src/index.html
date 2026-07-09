@@ -29,6 +29,7 @@
 
   <!-- SETUP SCREEN (erster Start) -->
   <div id="setupScreen" class="setup-screen">
+    <canvas id="setupWaveCanvas" class="wave-bg-canvas"></canvas>
     <div class="setup-card">
       <div class="setup-logo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:48px;height:48px;color:var(--accent);">
@@ -102,6 +103,7 @@
     <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
     <!-- SIDEBAR -->
     <aside class="sidebar" id="sidebar">
+      <canvas id="sidebarWaveCanvas" class="wave-bg-canvas"></canvas>
       <button class="sidebar-close" id="sidebarClose" title="Menue schliessen">x</button>
       <div class="sidebar-header">
         <div class="logo">
@@ -184,7 +186,9 @@
 
         <div class="chat-container">
           <div class="chat-messages" id="chatMessages">
+            <canvas id="chatWaveCanvas" class="wave-bg-canvas"></canvas>
             <div class="chat-welcome" id="chatWelcome">
+              <canvas id="welcomeWaveCanvas" class="wave-bg-canvas"></canvas>
               <div class="welcome-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg>
               </div>

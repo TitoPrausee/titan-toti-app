@@ -450,6 +450,9 @@
     $("setupScreen").style.display = "flex";
     $("mainApp").style.display = "none";
 
+    // Subtle FBM wave shader behind the setup card
+    initWaveBackground("setupWaveCanvas", 0.15);
+
     $$("#setupScreen [data-mode]").forEach(function(btn) {
       btn.addEventListener("click", function() {
         var mode = btn.getAttribute("data-mode");
@@ -546,6 +549,11 @@
   function initMain() {
     applyTheme();
     initSettings();
+
+    // Subtle FBM wave shader backgrounds for the main app surfaces
+    initWaveBackground("sidebarWaveCanvas", 0.08);
+    initWaveBackground("welcomeWaveCanvas", 0.12);
+    initWaveBackground("chatWaveCanvas", 0.06);
     callBackend("app_version", {}).then(function(v) {
       $("appVersion").textContent = "v" + v;
     }).catch(function() {});
@@ -1950,6 +1958,112 @@
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     brainGL.viewport(0, 0, canvas.width, canvas.height);
+  }
+
+
+  // --- REUSABLE WAVE BACKGROUND SHADER (FBM flowfield for UI panels) ---
+  // Same GLSL as the brain shader but lightweight (0.5x resolution multiplier)
+  // and with a global alpha / canvas opacity so it reads as a subtle texture.
+  var waveBgState = []; // [{canvas, gl, program, uniforms, animId, startTime, ro}]
+
+  function initWaveBackground(canvasId, opacity) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return null;
+    // Avoid double-init on the same canvas
+    for (var i = 0; i < waveBgState.length; i++) {
+      if (waveBgState[i].canvas === canvas) return waveBgState[i].animId;
+    }
+
+    var gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: false, antialias: false, depth: false })
+         || canvas.getContext("experimental-webgl", { alpha: true, premultipliedAlpha: false, antialias: false, depth: false });
+    if (!gl) { console.warn("initWaveBackground: WebGL not available for", canvasId); return null; }
+
+    var vs = compileShader(gl, gl.VERTEX_SHADER, BRAIN_VERT_SRC);
+    var fs = compileShader(gl, gl.FRAGMENT_SHADER, BRAIN_FRAG_SRC);
+    if (!vs || !fs) { console.warn("initWaveBackground: shader compile failed for", canvasId); return null; }
+
+    var program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.warn("initWaveBackground: program link failed for", canvasId, gl.getProgramInfoLog(program));
+      return null;
+    }
+    gl.useProgram(program);
+
+    // Fullscreen quad
+    var buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,  1, -1,  -1, 1,
+      -1,  1,  1, -1,   1, 1
+    ]), gl.STATIC_DRAW);
+    var aPos = gl.getAttribLocation(program, "aPos");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    var uniforms = {
+      uTime: gl.getUniformLocation(program, "uTime"),
+      uRes: gl.getUniformLocation(program, "uRes"),
+      uMouse: gl.getUniformLocation(program, "uMouse")
+    };
+
+    var entry = {
+      canvas: canvas,
+      gl: gl,
+      program: program,
+      uniforms: uniforms,
+      animId: null,
+      startTime: performance.now(),
+      ro: null
+    };
+
+    function resize() {
+      var w = canvas.clientWidth || canvas.parentElement.clientWidth;
+      var h = canvas.clientHeight || canvas.parentElement.clientHeight;
+      if (w < 2 || h < 2) return;
+      var dpr = window.devicePixelRatio || 1;
+      // Lightweight: 0.5x resolution multiplier for performance
+      var cw = Math.max(1, Math.floor(w * 0.5 * dpr));
+      var ch = Math.max(1, Math.floor(h * 0.5 * dpr));
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+        canvas.style.width = w + "px";
+        canvas.style.height = h + "px";
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+
+    resize();
+
+    // ResizeObserver for responsive resize
+    if (window.ResizeObserver) {
+      entry.ro = new ResizeObserver(function() { resize(); });
+      entry.ro.observe(canvas.parentElement || canvas);
+    }
+    window.addEventListener("resize", resize);
+
+    // Apply opacity via canvas style (clearColor handles alpha too)
+    canvas.style.opacity = String(opacity);
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+
+    function animate() {
+      entry.animId = requestAnimationFrame(animate);
+      if (!gl || !program) return;
+      var time = (performance.now() - entry.startTime) / 1000.0;
+      gl.useProgram(program);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform1f(uniforms.uTime, time);
+      gl.uniform2f(uniforms.uRes, canvas.width, canvas.height);
+      gl.uniform2f(uniforms.uMouse, 0.5, 0.5); // centered, static for backgrounds
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    animate();
+
+    waveBgState.push(entry);
+    return entry.animId;
   }
 
   // --- MEMORY ZONE LIST ---
