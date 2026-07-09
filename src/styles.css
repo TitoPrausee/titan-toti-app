@@ -1095,7 +1095,7 @@ input[type="range"]::-webkit-slider-thumb {
 .save-badge-icon { font-size: 14px; }
 .save-badge-text { flex: 1; }
 
-/* ============ MEMORY 3D GEHIRN ============ */
+/* ============ MEMORY FBM FLOWFIELD ============ */
 .memory-brain-container {
   flex: 1;
   display: flex;
@@ -1106,7 +1106,7 @@ input[type="range"]::-webkit-slider-thumb {
 .brain-canvas-wrap {
   flex: 1;
   position: relative;
-  background: radial-gradient(ellipse at center, #0f1f1c 0%, #131316 70%);
+  background: #131316;
   min-width: 0;
   overflow: hidden;
 }
@@ -1139,22 +1139,44 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 
-.brain-zones-hint {
+/* Floating zone labels overlaid on the shader */
+.zone-floats {
   position: absolute;
-  bottom: 12px;
-  left: 12px;
-  display: flex;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 5;
 }
 
-.zone-hint { display: flex; align-items: center; gap: 4px; }
-.zone-immediate { color: #ff9500; }
-.zone-shortterm { color: #00d4ff; }
-.zone-core { color: #2fb7a5; }
-.zone-skills { color: #30d158; }
-.zone-sensitive { color: #b537f2; }
+.zone-float {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  background: rgba(19, 19, 22, 0.55);
+  border: 1px solid rgba(255,255,255,0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  user-select: none;
+}
+
+.zone-float:hover {
+  transform: scale(1.08);
+  background: rgba(19, 19, 22, 0.75);
+  box-shadow: 0 0 16px rgba(47, 183, 165, 0.3);
+}
+
+/* Position each label at different spots over the shader */
+.zone-float.zone-immediate   { top: 12%;  left: 8%;  color: #ff9500; border-color: rgba(255,149,0,0.3); }
+.zone-float.zone-shortterm   { top: 12%;  right: 8%; color: #00d4ff; border-color: rgba(0,212,255,0.3); }
+.zone-float.zone-core        { top: 45%;  left: 50%; transform: translateX(-50%); color: #2fb7a5; border-color: rgba(47,183,165,0.35); }
+.zone-float.zone-core:hover  { transform: translateX(-50%) scale(1.08); }
+.zone-float.zone-skills      { bottom: 12%; left: 12%; color: #30d158; border-color: rgba(48,209,88,0.3); }
+.zone-float.zone-sensitive   { bottom: 12%; right: 12%; color: #b537f2; border-color: rgba(181,55,242,0.3); }
 
 /* ============ MEMORY FLOW BAR ============ */
 .memory-flow-bar {

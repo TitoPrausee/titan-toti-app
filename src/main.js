@@ -1661,20 +1661,19 @@
     input.style.height = Math.min(input.scrollHeight, 120) + "px";
   }
 
-  // ============ MEMORY 3D GEHIRN ============
+  // ============ MEMORY FBM FLOWFIELD SHADER ============
   var brainViewerInitialized = false;
-  var brainScene = null;
-  var brainCamera = null;
-  var brainRenderer = null;
-  var brainControls = null;
-  var brainRaycaster = null;
-  var brainMouse = null;
-  var brainModel = null;
-  var brainZones = [];
-  var brainAutoRotate = true;
+  var brainGL = null;
+  var brainProgram = null;
+  var brainUniformLocation = {};
+  var brainBuffer = null;
+  var brainMouseX = 0.5;
+  var brainMouseY = 0.5;
+  var brainTargetMouseX = 0.5;
+  var brainTargetMouseY = 0.5;
+  var brainStartTime = performance.now();
   var brainAnimationId = null;
   var currentMemoryZone = "core";
-  var hoveredZone = null;
 
   // Zone-Konfiguration (5 Zonen: 3-Tier Flow)
   var ZONE_CONFIG = {
@@ -1726,6 +1725,18 @@
         loadMemoryZone(zone);
       });
     });
+    // Floating zone labels — click to load zone
+    $$(".zone-float").forEach(function(label) {
+      label.addEventListener("click", function() {
+        var zone = label.getAttribute("data-zone");
+        if (zone) {
+          $$(".zone-tab").forEach(function(t) { t.classList.remove("active"); });
+          var tab = document.querySelector('.zone-tab[data-zone="' + zone + '"]');
+          if (tab) tab.classList.add("active");
+          loadMemoryZone(zone);
+        }
+      });
+    });
   }
 
   // Flow-Status-Bar aktualisieren
@@ -1751,6 +1762,84 @@
     }).catch(function() {});
   }
 
+  // --- WebGL FBM Flowfield Shader (Simplex Noise + Domain Warping) ---
+  var BRAIN_VERT_SRC = [
+    "attribute vec2 aPos;",
+    "void main(){ gl_Position=vec4(aPos,0.0,1.0); }"
+  ].join("\n");
+
+  var BRAIN_FRAG_SRC = [
+    "precision highp float;",
+    "uniform float uTime;",
+    "uniform vec2 uRes;",
+    "uniform vec2 uMouse;",
+    "",
+    "vec3 mod289v3(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}",
+    "vec2 mod289v2(vec2 x){return x-floor(x*(1.0/289.0))*289.0;}",
+    "vec3 permute(vec3 x){return mod289v3(((x*34.0)+1.0)*x);}",
+    "float snoise(vec2 v){",
+    "  const vec4 C=vec4(0.211324865405187,0.366025403784439,-0.577350269189626,0.024390243902439);",
+    "  vec2 i=floor(v+dot(v,C.yy));",
+    "  vec2 x0=v-i+dot(i,C.xx);",
+    "  vec2 i1=(x0.x>x0.y)?vec2(1.0,0.0):vec2(0.0,1.0);",
+    "  vec4 x12=x0.xyxy+C.xxzz;",
+    "  x12.xy-=i1;",
+    "  i=mod289v2(i);",
+    "  vec3 p=permute(permute(i.y+vec3(0.0,i1.y,1.0))+i.x+vec3(0.0,i1.x,1.0));",
+    "  vec3 m=max(0.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.0);",
+    "  m=m*m; m=m*m;",
+    "  vec3 x=2.0*fract(p*C.www)-1.0;",
+    "  vec3 h=abs(x)-0.5;",
+    "  vec3 ox=floor(x+0.5);",
+    "  vec3 a0=x-ox;",
+    "  m*=1.79284291400159-0.85373472095314*(a0*a0+h*h);",
+    "  vec3 g;",
+    "  g.x=a0.x*x0.x+h.x*x0.y;",
+    "  g.yz=a0.yz*x12.xz+h.yz*x12.yw;",
+    "  return 130.0*dot(m,g);",
+    "}",
+    "float fbm(vec2 p){",
+    "  float v=0.0; float a=0.5;",
+    "  for(int i=0;i<5;i++){ v+=a*snoise(p); p*=2.0; a*=0.5; }",
+    "  return v;",
+    "}",
+    "",
+    "void main(){",
+    "  vec2 uv=gl_FragCoord.xy/uRes;",
+    "  vec2 p=uv;",
+    "  p.x*=uRes.x/uRes.y;",
+    "  float t=uTime*0.08;",
+    "  vec2 q=vec2(fbm(p+vec2(0.0,t)),fbm(p+vec2(5.2,1.3)+t));",
+    "  vec2 r=vec2(fbm(p+4.0*q+vec2(1.7,9.2)+t*0.5),fbm(p+4.0*q+vec2(8.3,2.8)+t*0.3));",
+    "  float n=fbm(p+4.0*r);",
+    "  float md=distance(uv,uMouse);",
+    "  float mInf=smoothstep(0.5,0.0,md)*0.3;",
+    "  vec3 col=vec3(0.06,0.065,0.055);",
+    "  vec3 accent=vec3(0.184,0.718,0.647);",
+    "  vec3 deep=vec3(0.10,0.24,0.22);",
+    "  float flow=smoothstep(0.0,1.0,n+r.x*0.5);",
+    "  col=mix(col,deep,flow*0.8);",
+    "  float ridge=smoothstep(0.48,0.68,n+r.y);",
+    "  col+=accent*ridge*1.1;",
+    "  col+=accent*mInf*0.55;",
+    "  float vig=smoothstep(1.0,0.45,distance(uv,vec2(0.5)));",
+    "  col*=vig;",
+    "  gl_FragColor=vec4(col,1.0);",
+    "}"
+  ].join("\n");
+
+  function compileShader(gl, type, src) {
+    var shader = gl.createShader(type);
+    gl.shaderSource(shader, src);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error("Shader compile error:", gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
   function initBrainViewer() {
     if (brainViewerInitialized) return;
     var canvas = $("brainCanvas");
@@ -1763,437 +1852,104 @@
       return;
     }
 
-    // Three.js wurde via index.html <script type="module"> geladen.
-    // Warte auf three-loaded Event falls noch nicht bereit.
-    if (window.THREE_LOADED && window.THREE) {
-      initBrainThree(canvas, width, height);
-    } else {
-      var brainWaitTimeout = setTimeout(function() {
-        // Fallback: Falls Three.js nicht laedt (z.B. Module-Error), zeige Placeholder
-        if (!brainViewerInitialized) {
-          console.warn("Three.js Modul nicht geladen — verwende Placeholder");
-          if (window.THREE) {
-            initBrainThree(canvas, width, height);
-          } else {
-            $("brainLoading").textContent = "Three.js konnte nicht geladen werden.";
-          }
-        }
-      }, 5000);
-      window.addEventListener("three-loaded", function() {
-        clearTimeout(brainWaitTimeout);
-        initBrainThree(canvas, width, height);
-      });
-    }
-  }
-
-  function initBrainThree(canvas, width, height) {
-    var THREE = window.THREE;
     try {
-      brainScene = new THREE.Scene();
-      brainCamera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
-      brainCamera.position.set(0, 0, 5);
+      brainGL = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+      if (!brainGL) {
+        $("brainLoading").textContent = "WebGL nicht verfuegbar.";
+        return;
+      }
 
-      brainRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
-      brainRenderer.setPixelRatio(window.devicePixelRatio);
-      brainRenderer.setSize(width, height);
+      var vs = compileShader(brainGL, brainGL.VERTEX_SHADER, BRAIN_VERT_SRC);
+      var fs = compileShader(brainGL, brainGL.FRAGMENT_SHADER, BRAIN_FRAG_SRC);
+      if (!vs || !fs) {
+        $("brainLoading").textContent = "Shader-Fehler.";
+        return;
+      }
 
-      // Licht
-      var ambient = new THREE.AmbientLight(0x404060, 1.5);
-      brainScene.add(ambient);
-      var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-      dirLight.position.set(5, 5, 5);
-      brainScene.add(dirLight);
-      var dirLight2 = new THREE.DirectionalLight(0x4a9eff, 0.5);
-      dirLight2.position.set(-5, -5, 5);
-      brainScene.add(dirLight2);
+      brainProgram = brainGL.createProgram();
+      brainGL.attachShader(brainProgram, vs);
+      brainGL.attachShader(brainProgram, fs);
+      brainGL.linkProgram(brainProgram);
+      if (!brainGL.getProgramParameter(brainProgram, brainGL.LINK_STATUS)) {
+        console.error("Program link error:", brainGL.getProgramInfoLog(brainProgram));
+        $("brainLoading").textContent = "Program-Link-Fehler.";
+        return;
+      }
+      brainGL.useProgram(brainProgram);
 
-      // Raycaster
-      brainRaycaster = new THREE.Raycaster();
-      brainMouse = new THREE.Vector2();
+      // Fullscreen quad (two triangles)
+      brainBuffer = brainGL.createBuffer();
+      brainGL.bindBuffer(brainGL.ARRAY_BUFFER, brainBuffer);
+      brainGL.bufferData(brainGL.ARRAY_BUFFER, new Float32Array([
+        -1, -1,  1, -1,  -1, 1,
+        -1,  1,  1, -1,   1, 1
+      ]), brainGL.STATIC_DRAW);
 
-      // Versuche GLTFLoader + brain.glb zu laden
-      loadBrainModel(canvas, width, height);
+      var aPos = brainGL.getAttribLocation(brainProgram, "aPos");
+      brainGL.enableVertexAttribArray(aPos);
+      brainGL.vertexAttribPointer(aPos, 2, brainGL.FLOAT, false, 0, 0);
+
+      // Uniform locations
+      brainUniformLocation.uTime = brainGL.getUniformLocation(brainProgram, "uTime");
+      brainUniformLocation.uRes = brainGL.getUniformLocation(brainProgram, "uRes");
+      brainUniformLocation.uMouse = brainGL.getUniformLocation(brainProgram, "uMouse");
+
+      // Set canvas size
+      onBrainResize();
+
+      // Mouse tracking for shader glow
+      canvas.addEventListener("mousemove", function(e) {
+        var rect = canvas.getBoundingClientRect();
+        brainTargetMouseX = (e.clientX - rect.left) / rect.width;
+        brainTargetMouseY = 1.0 - (e.clientY - rect.top) / rect.height;
+      });
+      canvas.addEventListener("touchmove", function(e) {
+        if (!e.touches[0]) return;
+        var rect = canvas.getBoundingClientRect();
+        brainTargetMouseX = (e.touches[0].clientX - rect.left) / rect.width;
+        brainTargetMouseY = 1.0 - (e.touches[0].clientY - rect.top) / rect.height;
+      });
 
       brainViewerInitialized = true;
       $("brainLoading").style.display = "none";
-
-      // OrbitControls laden
-      loadOrbitControls(canvas);
-
-      // Event-Listener
-      canvas.addEventListener("click", onBrainClick);
-      canvas.addEventListener("mousemove", onBrainMouseMove);
-      canvas.addEventListener("touchend", onBrainClick);
-
-      // Animation-Loop starten
+      brainStartTime = performance.now();
       animateBrain();
     } catch (e) {
       $("brainLoading").textContent = "Fehler beim Initialisieren: " + e.message;
     }
   }
 
-  function loadOrbitControls(canvas) {
-    var THREE = window.THREE;
-    if (THREE && THREE.OrbitControls && brainCamera && brainRenderer) {
-      brainControls = new THREE.OrbitControls(brainCamera, brainRenderer.domElement);
-      brainControls.enableDamping = true;
-      brainControls.dampingFactor = 0.05;
-      brainControls.minDistance = 3;
-      brainControls.maxDistance = 15;
-      brainControls.autoRotate = true;
-      brainControls.autoRotateSpeed = 1.0;
-    } else {
-      // Fallback: manuelle Controls
-      setupManualControls(canvas);
-    }
-  }
-
-  function setupManualControls(canvas) {
-    var isDragging = false;
-    var prevX = 0, prevY = 0;
-    canvas.addEventListener("mousedown", function(e) {
-      isDragging = true;
-      prevX = e.clientX;
-      prevY = e.clientY;
-    });
-    canvas.addEventListener("mouseup", function() { isDragging = false; });
-    canvas.addEventListener("mousemove", function(e) {
-      if (!isDragging || !brainModel) return;
-      var dx = e.clientX - prevX;
-      var dy = e.clientY - prevY;
-      brainModel.rotation.y += dx * 0.01;
-      brainModel.rotation.x += dy * 0.01;
-      prevX = e.clientX;
-      prevY = e.clientY;
-    });
-    canvas.addEventListener("wheel", function(e) {
-      e.preventDefault();
-      if (brainCamera) {
-        brainCamera.position.z += e.deltaY * 0.01;
-        brainCamera.position.z = Math.max(3, Math.min(15, brainCamera.position.z));
-      }
-    });
-  }
-
-  function loadBrainModel(canvas, width, height) {
-    var THREE = window.THREE;
-    if (!THREE || !THREE.GLTFLoader) {
-      console.warn("GLTFLoader nicht verfuegbar, verwende Placeholder");
-      createPlaceholderBrain();
-      $("brainLoading").style.display = "none";
-      return;
-    }
-    // Verwende fetch() + GLTFLoader.parse() statt GLTFLoader.load()
-    // fetch() funktioniert zuverlaessig unter tauri://localhost
-    fetch("assets/brain_realistic.glb")
-      .then(function(res) { return res.arrayBuffer(); })
-      .then(function(buffer) {
-        var loader = new THREE.GLTFLoader();
-        loader.parse(buffer, "", function(gltf) {
-          brainModel = gltf.scene;
-          scaleAndCenterBrain(brainModel);
-          createBrainZones(brainModel);
-          brainScene.add(brainModel);
-          $("brainLoading").style.display = "none";
-        }, function(err) {
-          console.error("GLTF parse error:", err);
-          createPlaceholderBrain();
-          $("brainLoading").style.display = "none";
-        });
-      })
-      .catch(function(err) {
-        console.error("Fetch error fuer brain_realistic.glb:", err);
-        // Fallback auf brain.glb
-        fetch("assets/brain.glb")
-          .then(function(res) { return res.arrayBuffer(); })
-          .then(function(buffer) {
-            var loader = new THREE.GLTFLoader();
-            loader.parse(buffer, "", function(gltf) {
-              brainModel = gltf.scene;
-              scaleAndCenterBrain(brainModel);
-              createBrainZones(brainModel);
-              brainScene.add(brainModel);
-              $("brainLoading").style.display = "none";
-            }, function(err2) {
-              console.error("GLTF parse error (fallback):", err2);
-              createPlaceholderBrain();
-              $("brainLoading").style.display = "none";
-            });
-          })
-          .catch(function(err3) {
-            console.error("Fetch error fuer brain.glb:", err3);
-            createPlaceholderBrain();
-            $("brainLoading").style.display = "none";
-          });
-      });
-  }
-
-  // Skaliert und zentriert das Gehirn-Modell in der Kamera-Ansicht
-  function scaleAndCenterBrain(model) {
-    var THREE = window.THREE;
-    var box = new THREE.Box3().setFromObject(model);
-    var size = new THREE.Vector3();
-    box.getSize(size);
-    var center = new THREE.Vector3();
-    box.getCenter(center);
-    // Zentrieren
-    model.position.sub(center);
-    // Skalieren auf ~3 Einheiten Durchmesser
-    var maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) {
-      var scale = 3.0 / maxDim;
-      model.scale.setScalar(scale);
-    }
-  }
-
-  // 3D Gehirn: 5 Zonen (3-Tier Flow)
-  // Immediate: Gelb/Orange (#ff9500) — outer ring
-  // Short-Term: Cyan (#00d4ff) — middle ring
-  // Core: Blau (#0071e3) — linke Hemisphaere
-  // Skills: Gruen (#30d158) — rechte Hemisphaere
-  // Sensitive: Purple (#b537f2) — zentral
-  function createPlaceholderBrain() {
-    brainModel = new THREE.Group();
-
-    // Immediate Memory — outer ring (gelb/orange, gross durchsichtig)
-    var immGeo = new THREE.SphereGeometry(2.8, 32, 32);
-    var immMat = new THREE.MeshPhongMaterial({ color: 0xff9500, transparent: true, opacity: 0.12, shininess: 60, emissive: 0xff9500, emissiveIntensity: 0.05, side: THREE.DoubleSide });
-    var immMesh = new THREE.Mesh(immGeo, immMat);
-    immMesh.position.set(0, 0, 0);
-    immMesh.userData = { zone: "immediate", name: "Immediate Memory" };
-    brainModel.add(immMesh);
-    brainZones.push(immMesh);
-
-    // Short-Term Memory — middle ring (cyan, mittlere Sphaere)
-    var stGeo = new THREE.SphereGeometry(2.2, 32, 32);
-    var stMat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.18, shininess: 70, emissive: 0x00d4ff, emissiveIntensity: 0.08, side: THREE.DoubleSide });
-    var stMesh = new THREE.Mesh(stGeo, stMat);
-    stMesh.position.set(0, 0, 0);
-    stMesh.userData = { zone: "shortterm", name: "Short-Term Memory" };
-    brainModel.add(stMesh);
-    brainZones.push(stMesh);
-
-    // Core Memory — blaue Hemisphaere (linke Haelfte)
-    var coreGeo = new THREE.SphereGeometry(1.5, 32, 32, 0, Math.PI * 0.5, 0, Math.PI * 2);
-    var coreMat = new THREE.MeshPhongMaterial({ color: 0x0071e3, transparent: true, opacity: 0.85, shininess: 80 });
-    var coreMesh = new THREE.Mesh(coreGeo, coreMat);
-    coreMesh.position.set(-0.3, 0, 0);
-    coreMesh.userData = { zone: "core", name: "Core Memory" };
-    brainModel.add(coreMesh);
-    brainZones.push(coreMesh);
-
-    // Skills Memory — gruene Hemisphaere (rechte Haelfte)
-    var skillsGeo = new THREE.SphereGeometry(1.5, 32, 32, Math.PI * 0.5, Math.PI * 0.5, 0, Math.PI * 2);
-    var skillsMat = new THREE.MeshPhongMaterial({ color: 0x30d158, transparent: true, opacity: 0.85, shininess: 80 });
-    var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
-    skillsMesh.position.set(0.3, 0, 0);
-    skillsMesh.userData = { zone: "skills", name: "Skills" };
-    brainModel.add(skillsMesh);
-    brainZones.push(skillsMesh);
-
-    // Sensitive Memory — purple zentrale Sphaere
-    var sensGeo = new THREE.SphereGeometry(0.7, 32, 32);
-    var sensMat = new THREE.MeshPhongMaterial({ color: 0xb537f2, transparent: true, opacity: 0.9, shininess: 100, emissive: 0xb537f2, emissiveIntensity: 0.2 });
-    var sensMesh = new THREE.Mesh(sensGeo, sensMat);
-    sensMesh.position.set(0, 0, 0);
-    sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
-    brainModel.add(sensMesh);
-    brainZones.push(sensMesh);
-
-    // Verbindungs-Linien (synapsen-aehnlich) — Flow-Pfeile zwischen Zonen
-    var lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 });
-    for (var i = 0; i < 20; i++) {
-      var start = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
-      var end = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3);
-      var lineGeo = new THREE.BufferGeometry().setFromPoints([start, end]);
-      var line = new THREE.Line(lineGeo, lineMat);
-      brainModel.add(line);
-    }
-
-    // Flow-Pfeile: Immediate -> Short-Term -> Core (visuelle Verbindungen)
-    var flowMat = new THREE.LineBasicMaterial({ color: 0xff9500, transparent: true, opacity: 0.5 });
-    var flowPoints1 = [new THREE.Vector3(2.5, 0.5, 0), new THREE.Vector3(1.8, 0.3, 0)];
-    var flowLine1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(flowPoints1), flowMat);
-    brainModel.add(flowLine1);
-
-    var flowMat2 = new THREE.LineBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.5 });
-    var flowPoints2 = [new THREE.Vector3(1.5, -0.3, 0), new THREE.Vector3(0.5, -0.2, 0)];
-    var flowLine2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(flowPoints2), flowMat2);
-    brainModel.add(flowLine2);
-
-    brainScene.add(brainModel);
-  }
-
-  function createBrainZones(model) {
-    // Wenn brain.glb geladen wurde, erstelle Zonen-Meshes darueber
-    // Suche nach Meshes mit bestimmten Namen oder erstelle Spheren als Overlays
-    // Falls das Modell bereits benannte Zonen hat, nutze diese
-    var hasNamedZones = false;
-    model.traverse(function(child) {
-      if (child.isMesh) {
-        var name = (child.name || "").toLowerCase();
-        // Auch Material-Namen pruefen (brain_realistic.glb verwendet Material-Namen)
-        var matName = "";
-        if (child.material && child.material.name) {
-          matName = child.material.name.toLowerCase();
-        }
-        var combined = name + " " + matName;
-        if (combined.indexOf("immediate") >= 0 || combined.indexOf("imm") >= 0) {
-          child.userData = { zone: "immediate", name: "Immediate Memory" };
-          if (child.material) child.material.color.setHex(0xff9500);
-          brainZones.push(child);
-          hasNamedZones = true;
-        } else if (combined.indexOf("shortterm") >= 0 || combined.indexOf("short") >= 0) {
-          child.userData = { zone: "shortterm", name: "Short-Term Memory" };
-          if (child.material) child.material.color.setHex(0x00d4ff);
-          brainZones.push(child);
-          hasNamedZones = true;
-        } else if (combined.indexOf("core") >= 0) {
-          child.userData = { zone: "core", name: "Core Memory" };
-          if (child.material) child.material.color.setHex(0x0071e3);
-          brainZones.push(child);
-          hasNamedZones = true;
-        } else if (combined.indexOf("skill") >= 0) {
-          child.userData = { zone: "skills", name: "Skills" };
-          if (child.material) child.material.color.setHex(0x30d158);
-          brainZones.push(child);
-          hasNamedZones = true;
-        } else if (combined.indexOf("sensitive") >= 0 || combined.indexOf("sens") >= 0) {
-          child.userData = { zone: "sensitive", name: "Sensitive Data" };
-          if (child.material) child.material.color.setHex(0xb537f2);
-          brainZones.push(child);
-          hasNamedZones = true;
-        }
-      }
-    });
-
-    // Falls keine benannten Zonen gefunden wurden, erstelle 5 Overlay-Spheren
-    if (!hasNamedZones) {
-      // Immediate — outer ring
-      var immGeo = new THREE.SphereGeometry(1.6, 24, 24);
-      var immMat = new THREE.MeshPhongMaterial({ color: 0xff9500, transparent: true, opacity: 0.1, shininess: 50, side: THREE.DoubleSide });
-      var immMesh = new THREE.Mesh(immGeo, immMat);
-      immMesh.position.set(0, 0, 0);
-      immMesh.userData = { zone: "immediate", name: "Immediate Memory" };
-      model.add(immMesh);
-      brainZones.push(immMesh);
-
-      // Short-Term — middle ring
-      var stGeo = new THREE.SphereGeometry(1.3, 24, 24);
-      var stMat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.15, shininess: 60, side: THREE.DoubleSide });
-      var stMesh = new THREE.Mesh(stGeo, stMat);
-      stMesh.position.set(0, 0, 0);
-      stMesh.userData = { zone: "shortterm", name: "Short-Term Memory" };
-      model.add(stMesh);
-      brainZones.push(stMesh);
-
-      // Core — linke Haelfte
-      var coreGeo = new THREE.SphereGeometry(0.8, 24, 24, 0, Math.PI);
-      var coreMat = new THREE.MeshPhongMaterial({ color: 0x0071e3, transparent: true, opacity: 0.4, shininess: 60 });
-      var coreMesh = new THREE.Mesh(coreGeo, coreMat);
-      coreMesh.position.set(-0.8, 0, 0);
-      coreMesh.userData = { zone: "core", name: "Core Memory" };
-      model.add(coreMesh);
-      brainZones.push(coreMesh);
-
-      // Skills — rechte Haelfte
-      var skillsGeo = new THREE.SphereGeometry(0.8, 24, 24, Math.PI, Math.PI);
-      var skillsMat = new THREE.MeshPhongMaterial({ color: 0x30d158, transparent: true, opacity: 0.4, shininess: 60 });
-      var skillsMesh = new THREE.Mesh(skillsGeo, skillsMat);
-      skillsMesh.position.set(0.8, 0, 0);
-      skillsMesh.userData = { zone: "skills", name: "Skills" };
-      model.add(skillsMesh);
-      brainZones.push(skillsMesh);
-
-      // Sensitive — zentrale Sphaere
-      var sensGeo = new THREE.SphereGeometry(0.5, 24, 24);
-      var sensMat = new THREE.MeshPhongMaterial({ color: 0xb537f2, transparent: true, opacity: 0.5, shininess: 80, emissive: 0xb537f2, emissiveIntensity: 0.15 });
-      var sensMesh = new THREE.Mesh(sensGeo, sensMat);
-      sensMesh.position.set(0, 0, 0);
-      sensMesh.userData = { zone: "sensitive", name: "Sensitive Data" };
-      model.add(sensMesh);
-      brainZones.push(sensMesh);
-    }
-  }
-
-  function onBrainClick(event) {
-    if (!brainRaycaster || !brainCamera) return;
-    var rect = event.target.getBoundingClientRect();
-    var x = (event.clientX !== undefined ? event.clientX : (event.changedTouches && event.changedTouches[0].clientX)) - rect.left;
-    var y = (event.clientY !== undefined ? event.clientY : (event.changedTouches && event.changedTouches[0].clientY)) - rect.top;
-    brainMouse.x = (x / rect.width) * 2 - 1;
-    brainMouse.y = -(y / rect.height) * 2 + 1;
-    brainRaycaster.setFromCamera(brainMouse, brainCamera);
-    var intersects = brainRaycaster.intersectObjects(brainZones);
-    if (intersects.length > 0) {
-      var zone = intersects[0].object.userData.zone;
-      brainAutoRotate = false;
-      loadMemoryZone(zone);
-    }
-  }
-
-  function onBrainMouseMove(event) {
-    if (!brainRaycaster || !brainCamera) return;
-    var rect = event.target.getBoundingClientRect();
-    brainMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    brainMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    brainRaycaster.setFromCamera(brainMouse, brainCamera);
-    var intersects = brainRaycaster.intersectObjects(brainZones);
-    var tooltip = $("brainTooltip");
-    if (intersects.length > 0) {
-      var zoneData = intersects[0].object.userData;
-      if (zoneData && zoneData.zone) {
-        var zc = ZONE_CONFIG[zoneData.zone];
-        if (zc) {
-          tooltip.textContent = zc.name;
-          tooltip.style.display = "block";
-          tooltip.style.left = (event.clientX - rect.left + 10) + "px";
-          tooltip.style.top = (event.clientY - rect.top + 10) + "px";
-          // Glow-Effekt
-          if (hoveredZone !== intersects[0].object) {
-            if (hoveredZone && hoveredZone.material) {
-              hoveredZone.material.emissiveIntensity = hoveredZone.userData.originalEmissive || 0;
-            }
-            hoveredZone = intersects[0].object;
-            if (hoveredZone.material) {
-              hoveredZone.userData.originalEmissive = hoveredZone.material.emissiveIntensity || 0;
-              hoveredZone.material.emissive = new window.THREE.Color(zc.color);
-              hoveredZone.material.emissiveIntensity = 0.4;
-            }
-          }
-          event.target.style.cursor = "pointer";
-          return;
-        }
-      }
-    }
-    tooltip.style.display = "none";
-    if (hoveredZone && hoveredZone.material) {
-      hoveredZone.material.emissiveIntensity = hoveredZone.userData.originalEmissive || 0;
-    }
-    hoveredZone = null;
-    event.target.style.cursor = "default";
-  }
-
   function animateBrain() {
     brainAnimationId = requestAnimationFrame(animateBrain);
-    if (brainModel && brainAutoRotate) {
-      brainModel.rotation.y += 0.005;
-    }
-    if (brainControls) brainControls.update();
-    if (brainRenderer && brainScene && brainCamera) {
-      brainRenderer.render(brainScene, brainCamera);
-    }
+    if (!brainGL || !brainProgram) return;
+
+    // Smooth mouse interpolation
+    brainMouseX += (brainTargetMouseX - brainMouseX) * 0.05;
+    brainMouseY += (brainTargetMouseY - brainMouseY) * 0.05;
+
+    var time = (performance.now() - brainStartTime) / 1000.0;
+
+    brainGL.useProgram(brainProgram);
+    brainGL.uniform1f(brainUniformLocation.uTime, time);
+    brainGL.uniform2f(brainUniformLocation.uRes, brainGL.canvas.width, brainGL.canvas.height);
+    brainGL.uniform2f(brainUniformLocation.uMouse, brainMouseX, brainMouseY);
+
+    brainGL.drawArrays(brainGL.TRIANGLES, 0, 6);
   }
 
   function onBrainResize() {
     var wrap = $("brainCanvasWrap");
-    if (!wrap || !brainRenderer || !brainCamera) return;
+    if (!wrap || !brainGL) return;
     var w = wrap.clientWidth;
     var h = wrap.clientHeight;
     if (w < 10 || h < 10) return;
-    brainCamera.aspect = w / h;
-    brainCamera.updateProjectionMatrix();
-    brainRenderer.setSize(w, h);
+    var canvas = $("brainCanvas");
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    brainGL.viewport(0, 0, canvas.width, canvas.height);
   }
 
   // --- MEMORY ZONE LIST ---

@@ -266,7 +266,7 @@
       <!-- MEMORY VIEW (3D GEHIRN) -->
       <section class="view" id="view-memory">
         <div class="view-header">
-          <h1>Memory — 3D Gehirn</h1>
+          <h1>Memory — Flow</h1>
           <button class="btn-secondary" id="refreshMemoryBtn">Aktualisieren</button>
           <button class="btn-secondary" id="memoryFlowBtn" style="margin-left:8px;">Flow</button>
         </div>
@@ -277,13 +277,13 @@
           <div class="brain-canvas-wrap" id="brainCanvasWrap">
             <canvas id="brainCanvas"></canvas>
             <div class="brain-tooltip" id="brainTooltip" style="display:none;"></div>
-            <div class="brain-loading" id="brainLoading">Lade 3D Gehirn...</div>
-            <div class="brain-zones-hint">
-              <span class="zone-hint zone-immediate">● Immediate</span>
-              <span class="zone-hint zone-shortterm">● Short-Term</span>
-              <span class="zone-hint zone-core">● Core</span>
-              <span class="zone-hint zone-skills">● Skills</span>
-              <span class="zone-hint zone-sensitive">● Sensitiv</span>
+            <div class="brain-loading" id="brainLoading">Lade Memory...</div>
+            <div class="zone-floats">
+              <div class="zone-float zone-immediate" data-zone="immediate">Immediate</div>
+              <div class="zone-float zone-shortterm" data-zone="shortterm">Short-Term</div>
+              <div class="zone-float zone-core" data-zone="core">Core</div>
+              <div class="zone-float zone-skills" data-zone="skills">Skills</div>
+              <div class="zone-float zone-sensitive" data-zone="sensitive">Sensitiv</div>
             </div>
           </div>
           <div class="memory-zone-panel">
